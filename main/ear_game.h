@@ -135,19 +135,27 @@ const char *ear_note_name(uint8_t midi);
 float ear_note_freq(uint8_t midi);
 
 // --- tone synth (ear_tone.c, pure) ---
-#define EAR_TONE_SR 22050u            // quiz playback sample rate
+#define EAR_TONE_SR 16000u            // quiz playback rate = board-validated
+                                      // demo/xiaozhi rate (22050 distorts)
 #define EAR_TONE_MAX_VOICES 3         // chord = 3 simultaneous notes
-// One synth voice: 3 additive partials with per-sample exponential envelope.
+// One synth voice: integer wavetable (the FPU-less ESP32-C3 ran the float
+// version at 0.66x real time on device; integer keeps >10x headroom).
+// 3 partials share one phase accumulator; integer Q15 envelope.
 typedef struct {
-    float freq;        // fundamental Hz (0 = voice idle)
-    float amp;         // 0..1 output amplitude
-    float phase[3];    // partial phases (rad), partial k at (k+1)*f
+    uint32_t phase;    // 1.31 fixed-point sine phase accumulator
+    uint32_t step;     // per-sample phase increment (2^32 x hz / SR)
+    int32_t gain;      // output scale (amp x EAR_TONE_LEVEL)
+    int32_t env;       // Q15 envelope (attack / decay / release)
+    int32_t decay;     // Q15 per-sample decay multiplier
+    int32_t atk_step;  // Q15 attack increment per sample
+    int32_t rel_step;  // Q15 release decrement per sample
     uint32_t t;        // sample index since note start
     uint32_t total;    // note length in samples (envelope lifetime)
 } ear_tone_voice_t;
 // Arm a voice. amp 0..1; total = note length in samples @ EAR_TONE_SR.
 void ear_tone_start(ear_tone_voice_t *v, float hz, float amp, uint32_t total);
-// Render n samples into out. Silent after total reached (amp decays to ~0).
+// Render n samples into out. Silent after total reached (ends at ~45% env,
+// released to zero over the final 8 ms).
 void ear_tone_render(ear_tone_voice_t *v, int16_t *out, int n);
 // Mix helper: out[i] += in[i] with saturation (chord voices sum).
 void ear_tone_mix(int16_t *dst, const int16_t *src, int n);

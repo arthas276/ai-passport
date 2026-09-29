@@ -88,6 +88,12 @@ void app_main(void) {
 
     bsp_i2c_init();
 
+    // Battery gauge (CW2017, I2C 0x63) is optional hardware: on init failure
+    // bsp_battery_soc() keeps returning -1 and HOME shows "--%" (graceful).
+    if (bsp_battery_init() != ESP_OK) {
+        ESP_LOGW(TAG, "battery gauge init failed (HOME will show --%%)");
+    }
+
     // Display is mandatory: without it there is no app. Fail loudly.
     if (bsp_display_init() != ESP_OK || !bsp_lvgl_init()) {
         ESP_LOGE(TAG, "display/LVGL init failed (MOSI=%d SCLK=%d CS=%d DC=%d)",

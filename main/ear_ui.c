@@ -385,8 +385,10 @@ static void quiz_audio(ear_audio_event_t *ev) {
 static uint8_t s_sing_target;     // MIDI target note 60..69
 static uint8_t s_sing_fails;      // consecutive failed attempts on this note
 static bool s_showing;            // replaying target after 3 fails
-// Per-level tolerance in cents (PRD 3.2).
-static const float SING_TOL[3] = {50.0f, 35.0f, 25.0f};
+// Per-level tolerance in cents (PRD 3.2). Device pass 2026-09-29: beginners
+// found +/-50 too tight against detector jitter; L1 sits just under a
+// semitone, L3 stays demanding.
+static const float SING_TOL[3] = {65.0f, 45.0f, 30.0f};
 
 // Build the sing screen and arm a fresh target note.
 static void enter_sing(void) {

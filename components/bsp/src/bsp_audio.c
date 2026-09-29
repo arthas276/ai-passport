@@ -449,8 +449,11 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
 
     esp_codec_dev_sample_info_t fs = {
         .bits_per_sample = bits,
-        .channel = ch,
-        .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
+        // ES8311 按标准 I2S 双槽帧工作且固定监听左槽：1 槽帧（16 BCLK/WS）会让
+        // codec 隔一个取一个字（等效采样率减半+镜像混叠，音量无关的破音）。
+        // 公开 API 保持逻辑单声道，传输层走复制的双槽（write 复制 / read 取左）。
+        .channel = 2,
+        .channel_mask = 0,           // 0 → 两槽都活跃（标准双槽帧）
         .sample_rate = hz,
         .mclk_multiple = 0,          // 0 → 驱动按默认 256xfs 取 MCLK
     };
@@ -472,7 +475,8 @@ esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     }
 
     s_opened = true; s_hz = hz; s_bits = bits; s_ch = ch;
-    ESP_LOGI(TAG, "codec 打开 %luHz/%ubit/%uch", (unsigned long)hz, bits, ch);
+    ESP_LOGI(TAG, "codec 打开 %luHz/%ubit/%uch transport=dup-stereo",
+             (unsigned long)hz, bits, ch);
     return ESP_OK;
 
 fail:
@@ -554,14 +558,33 @@ esp_err_t bsp_audio_wake(void) {
     return ESP_OK;
 }
 
+// 逻辑单声道传输的中间缓冲：write 把 L=R 复制进双槽帧，read 只取左槽。
+// 上限 1024 采样/次（ear_audio 的 CHUNK=512、EAR_PITCH_FRAME=1024，demo 为 512）。
+static int16_t s_st_out[1024];       // 512 单声道样本 -> 1024 双槽样本
+static int16_t s_st_in[2048];        // 读侧双槽缓冲，最多取回 1024 单声道样本
+
 esp_err_t bsp_audio_write(const void *pcm, size_t bytes) {
     if (!s_dev || !s_opened || s_sleeping) return ESP_ERR_INVALID_STATE;
-    return esp_codec_dev_write(s_dev, (void *)pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
+    size_t n = bytes / 2;
+    if (n == 0 || n > sizeof(s_st_out) / 2) return ESP_ERR_INVALID_ARG;
+    const int16_t *src = (const int16_t *)pcm;
+    for (size_t i = 0; i < n; i++) {
+        s_st_out[2 * i] = src[i];
+        s_st_out[2 * i + 1] = src[i];
+    }
+    return esp_codec_dev_write(s_dev, s_st_out, (int)(n * 4)) == 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t bsp_audio_read(void *pcm, size_t bytes) {
     if (!s_dev || !s_opened || s_sleeping) return ESP_ERR_INVALID_STATE;
-    return esp_codec_dev_read(s_dev, pcm, bytes) == 0 ? ESP_OK : ESP_FAIL;
+    size_t n = bytes / 2;
+    if (n == 0 || n > sizeof(s_st_in) / 4) return ESP_ERR_INVALID_ARG;
+    if (esp_codec_dev_read(s_dev, s_st_in, (int)(n * 4)) != 0) return ESP_FAIL;
+    int16_t *out = (int16_t *)pcm;
+    for (size_t i = 0; i < n; i++) {
+        out[i] = s_st_in[2 * i + 1]; // 槽位 A/B：左槽检出负几千音分，试右槽
+    }
+    return ESP_OK;
 }
 
 void bsp_audio_set_volume(uint8_t percent) {

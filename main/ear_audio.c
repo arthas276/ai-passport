@@ -1,11 +1,12 @@
 // ear_audio.c - single audio worker task: all bsp_audio calls serialize here
 // (BSP rule: PCM IO blocks; format changes must go through the close/open
-// sequence, so playback 22050 and capture 16000 never overlap).
+// sequence, so playback and capture at the same 16 kHz still never overlap).
 #include "ear_audio.h"
 #include "ear_audio.h"
 #include "bsp_audio.h"
 #include "bsp_display.h" // not used here; events go through the queue
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <string.h>
@@ -18,8 +19,8 @@ static const char *TAG = "ear_audio";
 #define GAP_MS 90                    // gap between interval notes
 #define CHORD_MS 900                 // chord length
 #define TARGET_MS 700                // sing target preview length
-#define SING_WINDOW_MS 3000          // attempt window
-#define SING_HOLD_MS 1500            // in-tune time needed for PASS
+#define SING_WINDOW_MS 4000          // attempt window
+#define SING_HOLD_MS 1000            // in-tune time needed for PASS
 
 // Playback request, one job = one sound event.
 typedef struct {
@@ -54,6 +55,7 @@ static void play_note(uint8_t midi, int ms, float amp) {
     ear_tone_start(&v, ear_note_freq(midi), amp, EAR_TONE_SR * ms / 1000u);
     int left = EAR_TONE_SR * ms / 1000u;
     static int16_t buf[CHUNK];
+    int64_t t0 = esp_timer_get_time();   // DIAG: real-time budget check
     while (left > 0 && !s_cancel) {
         int n = left < CHUNK ? left : CHUNK;
         ear_tone_render(&v, buf, n);
@@ -62,6 +64,13 @@ static void play_note(uint8_t midi, int ms, float amp) {
             return;
         }
         left -= n;
+    }
+    // DIAG: a 450 ms note must complete in ~450 ms; way over = CPU starvation
+    // (render can't keep pace) -> I2S DMA underruns -> crackle/distortion.
+    int64_t dt = esp_timer_get_time() - t0;
+    if (dt > (int64_t)ms * 1000 + 20000) {
+        ESP_LOGW(TAG, "slow note: %d ms budget took %lld us", ms,
+                 (long long)dt);
     }
 }
 
@@ -217,6 +226,15 @@ static void audio_task_entry(void *arg) {
 esp_err_t ear_audio_init(QueueHandle_t event_q) {
     if (s_task) return ESP_OK;   // idempotent
     s_event_q = event_q;
+    // BSP audio hardware (I2C->ES8311, full-duplex I2S, codec dev) must be
+    // initialized once up front: bsp_audio_set_format() returns
+    // ESP_ERR_INVALID_STATE without it, so the first job would silently
+    // produce no sound and no capture (see bsp_audio.c s_initialized).
+    esp_err_t bsp = bsp_audio_init();
+    if (bsp != ESP_OK) {
+        ESP_LOGE(TAG, "bsp_audio_init failed: %s", esp_err_to_name(bsp));
+        // keep going: worker still posts PLAY_DONE/SING_FAIL, UI flow lives
+    }
     s_job_q = xQueueCreate(4, sizeof(ear_job_t));
     if (!s_job_q) return ESP_ERR_NO_MEM;
     if (xTaskCreate(audio_task_entry, "ear_audio", 6144, NULL, 4, &s_task)

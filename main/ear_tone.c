@@ -1,55 +1,93 @@
-// ear_tone.c - additive synthesizer for quiz tones and cues. PURE C.
-// Per-sample sinf/expf are soft-float on ESP32-C3 (no FPU); budget is fine
-// at 22050 Hz mono (see PRD 3.1), params centralized here for device tuning.
+// ear_tone.c - integer wavetable synth for quiz tones and cues. PURE C.
+// Device bring-up 2026-09-29: the original float render (3x sinf + expf per
+// sample, all soft-float on the FPU-less ESP32-C3) rendered a 450 ms note in
+// 677 ms -> constant I2S DMA underruns -> the reported "bad timbre". Integer
+// table + multiply-shift restores >10x real-time headroom. Params centralized
+// here for device tuning.
 #include "ear_game.h"
-#include <math.h>
+#include <math.h>     // one-time sinf/expf at note start / LUT build only
 
-// Output scaling: full-scale sine at amp=1, env=1 peaks at 12000 (~-4.7 dBFS),
-// chords sum up to 3 voices -> worst case ~36000 (clipping guard in mix).
-#define EAR_TONE_SCALE 12000.0f
-// Partial weights: piano-ish spectrum without sounding organ-like.
-#define W1 1.0f
-#define W2 0.5f
-#define W3 0.2f
-// Envelope: linear attack then exponential decay to ~5% at note end.
+// Output level: peak = LUT peak (Q15) x env x gain, shifted to Q15 twice.
+// Sine at amp=1 peaks at 8500 (~-11.7 dBFS) — keeps the small speaker in its
+// linear range; chords (3 voices at amp 0.55) sum to ~12k peak, no clipping.
+#define EAR_TONE_LEVEL 8500
+// Partial weights Q15: sine-dominant; higher partials only tint (the tiny
+// speaker turns strong upper partials into harshness).
+#define W1_Q15 32767
+#define W2_Q15 10486    // 0.32
+#define W3_Q15 3932     // 0.12
+
+// Envelope: linear attack, gentle exponential decay to ~45% at note end (a
+// sustained tone is a steadier pitch reference than a dying one), linear
+// release over the last 8 ms so notes don't end in a click.
 #define EAR_TONE_ATK (8u * (EAR_TONE_SR / 1000u))   // 8 ms attack in samples
+#define EAR_TONE_REL (8u * (EAR_TONE_SR / 1000u))   // 8 ms release in samples
+
+// 1024-entry sine table in Q15, built once at first use (1024 sinf calls at
+// boot, ~10 ms) — no per-sample float math on the hot path.
+#define EAR_TONE_LUT_BITS 10
+#define EAR_TONE_LUT_SIZE (1u << EAR_TONE_LUT_BITS)
+static int16_t s_sin_lut[EAR_TONE_LUT_SIZE];
+static bool s_lut_ready;
+
+static void lut_init(void) {
+    for (uint32_t i = 0; i < EAR_TONE_LUT_SIZE; i++) {
+        s_sin_lut[i] = (int16_t)(sinf((float)i * 6.2831853f /
+                                      (float)EAR_TONE_LUT_SIZE) * 32767.0f);
+    }
+    s_lut_ready = true;
+}
+
+// Q15 sine via linear interpolation; phase is a 1.31 accumulator.
+static inline int32_t lut_read(uint32_t phase) {
+    uint32_t idx = phase >> (32 - EAR_TONE_LUT_BITS);
+    int32_t a = s_sin_lut[idx];
+    int32_t b = s_sin_lut[(idx + 1) & (EAR_TONE_LUT_SIZE - 1)];
+    int32_t frac = (int32_t)((phase >> 7) & 0x7FFF);   // next 15 bits, Q15
+    return a + (((b - a) * frac) >> 15);
+}
 
 // Arm one voice. total = note length in samples at EAR_TONE_SR.
 void ear_tone_start(ear_tone_voice_t *v, float hz, float amp, uint32_t total) {
-    v->freq = hz;
-    v->amp = amp;
-    v->phase[0] = v->phase[1] = v->phase[2] = 0.0f;
+    if (!s_lut_ready) lut_init();
+    v->phase = 0;
+    v->step = (uint32_t)((uint64_t)(hz * 4294967296.0f) / EAR_TONE_SR);
+    v->gain = (int32_t)(amp * (float)EAR_TONE_LEVEL);
+    v->env = 0;
+    v->decay = (int32_t)(expf(-0.8f / (float)(total > EAR_TONE_ATK
+                                             ? total - EAR_TONE_ATK : 1)) *
+                         32767.0f);
+    v->atk_step = 32767 / (int32_t)EAR_TONE_ATK;
+    v->rel_step = 32767 / (int32_t)EAR_TONE_REL;
     v->t = 0;
     v->total = total;
 }
 
 // Render n samples. Silence once t >= total (envelope finished).
 void ear_tone_render(ear_tone_voice_t *v, int16_t *out, int n) {
-    for (int i = 0; i < n; i++) {
-        int16_t s = 0;
-        if (v->freq > 0.0f && v->t < v->total) {
-            float env = (v->t < EAR_TONE_ATK)
-                ? (float)v->t / (float)EAR_TONE_ATK
-                : expf(-3.0f * (float)(v->t - EAR_TONE_ATK) /
-                       (float)(v->total - EAR_TONE_ATK));
-            float s1 = sinf(v->phase[0]) * W1;
-            float s2 = sinf(v->phase[1]) * W2;
-            float s3 = sinf(v->phase[2]) * W3;
-            float mixv = s1 + s2 + s3;
-            s = (int16_t)(mixv * env * v->amp * EAR_TONE_SCALE);
-        }
-        out[i] = s;
-        if (v->freq > 0.0f) {
-            float step0 = (6.2831853f * v->freq) / (float)EAR_TONE_SR;
-            v->phase[0] += step0;
-            float stepk = step0 * 2.0f;
-            v->phase[1] += stepk;
-            if (v->phase[1] > 6.2831853f) v->phase[1] -= 6.2831853f;
-            v->phase[2] += step0 * 3.0f;
-            if (v->phase[2] > 6.2831853f) v->phase[2] -= 6.2831853f;
-            if (v->phase[0] > 6.2831853f) v->phase[0] -= 6.2831853f;
+    for (int s = 0; s < n; s++) {
+        int16_t sample = 0;
+        if (v->step > 0 && v->t < v->total) {
+            // envelope: linear attack, exp decay, linear release override
+            if (v->t < EAR_TONE_ATK) {
+                v->env = (int32_t)v->t * v->atk_step;
+            } else {
+                v->env = (v->env * v->decay) >> 15;
+            }
+            uint32_t rt = v->total - v->t;
+            if (rt <= EAR_TONE_REL) {
+                v->env = (int32_t)rt * v->rel_step;
+            }
+            // 3 partials from one accumulator: 2f and 3f are free wraps
+            int32_t mix = (W1_Q15 * lut_read(v->phase)
+                           + W2_Q15 * lut_read(v->phase * 2u)
+                           + W3_Q15 * lut_read(v->phase * 3u)) >> 15;
+            int32_t shaped = ((mix * v->env) >> 15) * v->gain >> 15;
+            sample = (int16_t)shaped;
+            v->phase += v->step;
             v->t++;
         }
+        out[s] = sample;
     }
 }
 

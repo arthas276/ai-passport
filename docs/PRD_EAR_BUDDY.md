@@ -46,21 +46,22 @@
 - Auto level per mode: session score >= 8 -> level up (max 3); <= 4 -> down
   (min 1); persisted in NVS
 - Combo counter display-only (no XP effect)
-- Tone: additive synthesis (f + 0.5*2f + 0.25*3f), fast attack, exp decay,
-  22050 Hz 16-bit mono; interval = two notes 450 ms + 90 ms gap; chord = three
+- Tone: additive synthesis (f + 0.32*2f + 0.12*3f), fast attack, gentle decay
+  + 8 ms release, 16000 Hz 16-bit mono (board-validated rate; 22050 distorts);
+  interval = two notes 450 ms + 90 ms gap; chord = three
   notes together 900 ms; roots C4-A4 (261.6-440 Hz, tiny-speaker friendly)
 
 ### 3.2 Sing mode
 
 - Play target note (C4-A4), show note name, UP replays target, OK starts
-  listening (max 3 s)
+  listening (max 4 s)
 - 16 kHz capture -> 1024-pt autocorrelation f0 (65-600 Hz) -> median-3 ->
   cents = 1200*log2(f0/f_target)
-- PASS if |cents| <= tolerance held for 1.5 s within the 3 s window;
-  tolerance L1 +/-50, L2 +/-35, L3 +/-25 cents; PASS -> +2 XP
+- PASS if |cents| <= tolerance held for 1.0 s within the 4 s window;
+  tolerance L1 +/-65, L2 +/-45, L3 +/-30 cents; PASS -> +2 XP
 - 3 failed attempts -> device plays the target note (show answer) -> next
   note; a sing session = 5 notes
-- Playback (22050 Hz) and capture (16 kHz) switch via bsp_audio_set_format;
+- Playback and capture both 16 kHz; format switch via bsp_audio_set_format
   serialized on the single audio worker (BSP constraint)
 
 ## 4. Pet Economy
@@ -90,7 +91,7 @@ QUIZ
 - wrong answer: correct cell highlights 1.5 s with replay, then next
 
 SING
-- "SING: E4" big; horizontal cents scale -50..+50 with moving marker;
+- "SING: E4" big; horizontal cents scale -94..+94 with moving marker;
   hold progress bar; "OK START - UP REPLAY" hint
 - OK starts 3 s attempt; live marker; PASS -> "+2 XP" flash -> next note
 - 3 fails -> device plays target (show answer) -> next note
@@ -169,7 +170,7 @@ gcc -std=c11 -Wall -Wextra -Werror. Registered in tools/validate.sh
 | Range | C4-A4 | tiny-speaker friendly + standard ear-training range |
 | Wrong answers | no penalty | no-punishment principle |
 | Stage thresholds | 10/30/80/160 XP | ~2-3 weeks daily practice to max |
-| Sing tolerance | +/-50/35/25 cents | L1 forgiving, L3 challenging |
+| Sing tolerance | +/-65/45/30 cents | device pass: +/-50 too tight vs detector jitter; L1 just under a semitone |
 | 3 fails -> show answer | yes | avoid stuck states |
 | OK-long quit keeps XP | yes | no-punishment principle |
 | Idle backlight 30% after 10 s | yes | repo power convention |
