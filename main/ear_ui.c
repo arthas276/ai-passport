@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static const char *TAG = "ear_ui";   // duet diagnostics via serial_peek
+
 
 // ---- palette (C_BG must match tools/gen_pet_assets.py PANEL_BG) ----
 #define C_BG     0x1B263B   // dark navy background
@@ -572,7 +574,7 @@ static const char *duet_tier_text(void) {
     case EAR_STAGE_HATCHLING: return "HARMONY: UNISON";
     case EAR_STAGE_CHICK:     return "HARMONY: 3RD";
     case EAR_STAGE_FLEDGLING: return "HARMONY: 6TH";
-    default:                  return "HARMONY: VOICE-LEAD";
+    default:                  return "HARMONY: LEAD";
     }
 }
 
@@ -645,12 +647,21 @@ static void duet_review(void) {
     }
     lbl(d_notes, line, C_TEXT);
     char ktxt[24];
-    snprintf(ktxt, sizeof(ktxt), "KEY %s %s%s", ear_duet_pc_name(s_duet_key.tonic),
-             s_duet_key.minor ? "min" : "maj",
-             s_duet_key.fallback ? "?" : "");
+    snprintf(ktxt, sizeof(ktxt), "KEY %s%s %s",
+             s_duet_key.fallback ? "~" : "",
+             ear_duet_pc_name(s_duet_key.tonic),
+             s_duet_key.minor ? "min" : "maj");
     lbl(d_key, ktxt, C_CYAN);
+    ESP_LOGI(TAG, "duet review: %u notes key=%s%u%s harmonies:",
+             (unsigned)p->count, s_duet_key.fallback ? "~" : "",
+             (unsigned)s_duet_key.tonic, s_duet_key.minor ? "min" : "maj");
+    for (uint8_t i = 0; i < p->count; i++) {
+        ESP_LOGI(TAG, "  note %u: midi=%u ms=%u harm=%u", (unsigned)i + 1,
+                 (unsigned)p->notes[i].midi, (unsigned)p->notes[i].ms,
+                 (unsigned)s_duet_harmony[i]);
+    }
     lbl(d_status, "", C_TEXT);
-    lbl(d_hint, "OK PLAY  UP RESING  OKL EXIT", C_MUTED);
+    lbl(d_hint, "OK PLAY UP RESING OKL EXIT", C_MUTED);
     s_duet_state = DUET_REVIEW;
 }
 
@@ -720,7 +731,7 @@ static void duet_audio_ev(ear_audio_event_t *ev) {
         s_duet_pet_frame ^= 1u;
         lv_image_set_src(d_pet,
             &EAR_PET_IMG[ear_pet_stage(s_save.xp)][s_duet_pet_frame]);
-        lv_obj_set_y(d_pet, s_duet_pet_frame ? 78 : 84);
+        lv_obj_set_y(d_pet, s_duet_pet_frame ? 72 : 84);
         return;
     }
     if (ev->kind == EAR_AUDIO_EV_PLAY_DONE && s_duet_state == DUET_PLAY) {

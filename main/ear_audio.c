@@ -221,20 +221,30 @@ static void run_duet_capture(void) {
     xQueueSend(s_event_q, &ev, 0);
 }
 
-// One duet note: melody (amp 0.9) + harmony (amp 0.55) on two synth voices,
-// chunk-rendered exactly like the chord path of play_question.
+// One duet note: melody (0.9) + harmony (0.6) + the harmony doubled one
+// octave up (0.45). The octave double is what makes the harmony audible
+// on the small speaker: a plain third/sixth sits too close to the melody
+// and gets masked into one thicker tone (user device feedback 2026-10-11).
+// The double is skipped when it would exceed D6 (small-speaker shrillness).
+#define DUET_DOUBLE_MAX 86
 static void play_duet_pair(uint8_t melody, uint8_t harmony, int ms) {
-    ear_tone_voice_t vo[2];
+    ear_tone_voice_t vo[3];
     int16_t tmp[CHUNK];
     static int16_t out[CHUNK];
     int total = EAR_TONE_SR * ms / 1000u;
+    int voices = 2;
     ear_tone_start(&vo[0], ear_note_freq(melody), 0.9f, total);
-    ear_tone_start(&vo[1], ear_note_freq(harmony), 0.55f, total);
+    ear_tone_start(&vo[1], ear_note_freq(harmony), 0.6f, total);
+    if (harmony + 12 <= DUET_DOUBLE_MAX) {
+        ear_tone_start(&vo[2], ear_note_freq((uint8_t)(harmony + 12)), 0.45f,
+                       total);
+        voices = 3;
+    }
     int left = total;
     while (left > 0 && !s_cancel) {
         int n = left < CHUNK ? left : CHUNK;
         memset(out, 0, n * 2);
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < voices; i++) {
             ear_tone_render(&vo[i], tmp, n);
             ear_tone_mix(out, tmp, n);
         }
@@ -256,6 +266,7 @@ static void run_duet_play(const ear_job_t *job) {
     }
     bsp_audio_set_volume(s_volume);
     const ear_duet_phrase_t *p = &job->phrase;
+    ESP_LOGI(TAG, "duet play: %u notes", (unsigned)p->count);
     for (uint8_t i = 0; i < p->count && !s_cancel; i++) {
         ear_audio_event_t ev = {
             .kind = EAR_AUDIO_EV_DUET_NOTE, .pct = (uint8_t)(i + 1),
@@ -264,6 +275,8 @@ static void run_duet_play(const ear_job_t *job) {
         int ms = p->notes[i].ms;
         if (ms < DUET_NOTE_MIN_MS) ms = DUET_NOTE_MIN_MS;
         if (ms > DUET_NOTE_MAX_MS) ms = DUET_NOTE_MAX_MS;
+        ESP_LOGI(TAG, "duet note %u: melody=%u harm=%u %dms", (unsigned)i + 1,
+                 (unsigned)p->notes[i].midi, (unsigned)job->harmony[i], ms);
         play_duet_pair(p->notes[i].midi, job->harmony[i], ms);
         if (i + 1 < p->count) play_gap(DUET_GAP_MS);
     }

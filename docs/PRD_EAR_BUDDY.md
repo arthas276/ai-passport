@@ -98,9 +98,12 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
   Songbird = per-note 3rd-or-6th chosen for smooth voice leading
   (smallest harmony step). Voices clamp to MIDI 48..81 (C3..A5); a voice
   above A5 folds down one octave (> 880 Hz rule)
-- Playback: melody amp 0.9 + harmony amp 0.55 on the integer 3-voice
-  synth; per-note length = captured duration clamped to 200..900 ms plus
-  an 80 ms gap; REVIEW shows the transcription + key before playing
+- Playback: melody amp 0.9 + harmony amp 0.6 + the harmony doubled one
+  octave up at 0.45 on the integer synth (the octave double keeps the
+  harmony audible on the small speaker — a plain close-interval harmony
+  gets masked into one thicker tone); per-note length = captured duration
+  clamped to 200..900 ms plus an 80 ms gap; REVIEW shows the transcription
+  + key before playing
 - < 2 confirmed notes -> "TOO SHORT" -> OK retries the capture
 
 ## 4. Pet Economy
