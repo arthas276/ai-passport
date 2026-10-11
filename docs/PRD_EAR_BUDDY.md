@@ -5,7 +5,7 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.2 (2026-10-11: octave-safe pitch picking, median-3 f0 smoothing, sing tolerance re-tune, battery gauge diagnostics, octave-equivalent sing grading, two-hold reset confirmation, 5-note sing sessions with a shared result page, lifetime stats)
+> PRD version: v1.3 (2026-10-11: DUET mode — sing a phrase, the pet harmonizes; see 3.3)
 > Date: 2026-09-28
 > Mode: user pre-authorized autonomous overnight build; AI made the listed
 > default decisions; on-device verification planned next evening with user.
@@ -74,11 +74,41 @@
 - Playback and capture both 16 kHz; format switch via bsp_audio_set_format
   serialized on the single audio worker (BSP constraint)
 
+### 3.3 Duet mode (v1.3)
+
+- Round-based: the user sings one 2-4 s phrase; the device transcribes it
+to a note sequence, infers the key, then plays the phrase back as a duet:
+  melody echo + one harmony voice; the pet hops once per note; +3 XP per
+  performed duet (decision: per-duet, no fixed session length)
+- Capture: same 16 kHz chain as SING (octave-safe f0 + median-3). Window
+  4 s max; ends early after >= 2 confirmed notes + 0.8 s silence
+- Segmentation [PURE ear_duet.c]: frame -> nearest semitone; a note is
+  confirmed after 3 stable frames (~192 ms, i.e. the >= 190 ms minimum);
+  within-note wobble within +/-70 cents stays one note (anti-vibrato);
+  an unvoiced gap >= 350 ms closes the note; at most 12 notes kept
+- Key inference [PURE]: duration-weighted pitch-class histogram (first
+  and last notes add a 50% anchor bonus — melodies start/end on the tonic)
+  scored against 24 major/minor templates; weak margin (leader ahead of the
+  runner-up by < 10% of sung duration) or < 3 distinct classes -> fallback
+  tonic = heaviest class, major (drone/simple phrases). Octave doubling needs no special case:
+  pitch classes already fold octaves (an octave-low male voice works)
+- Harmony (stage-gated, diatonic in the inferred key):
+  Egg/Hatchling = unison echo (quieter twin voice); Chick = diatonic 3rd
+  (below, above when below < C3); Fledgling = diatonic 6th (same rule);
+  Songbird = per-note 3rd-or-6th chosen for smooth voice leading
+  (smallest harmony step). Voices clamp to MIDI 48..81 (C3..A5); a voice
+  above A5 folds down one octave (> 880 Hz rule)
+- Playback: melody amp 0.9 + harmony amp 0.55 on the integer 3-voice
+  synth; per-note length = captured duration clamped to 200..900 ms plus
+  an 80 ms gap; REVIEW shows the transcription + key before playing
+- < 2 confirmed notes -> "TOO SHORT" -> OK retries the capture
+
 ## 4. Pet Economy
 
 - Stages (cumulative XP): Egg 0 -> Hatchling 10 -> Chick 30 -> Fledgling 80
   -> Songbird 160
-- XP sources: quiz correct +1; perfect session (10/10) +3; sing PASS +2/note
+- XP sources: quiz correct +1; perfect session (10/10) +3; sing PASS +2/note;
+  duet performed +3 (v1.3)
 - Reactions: correct -> pet hop + happy blip; wrong -> head shake; evolve ->
   stage image swap + fanfare + hop x3
 - XP never decreases (no-punishment principle); no dates, no streaks
@@ -89,7 +119,8 @@
 HOME
 - top: "EAR BUDDY" title + battery % top-right
 - center: pet sprite 48x48 + XP bar (180x10) + "LV n cur/next" text
-- bottom: mode card cycling INTERVAL / CHORD / SING / SETUP via UP/DOWN
+- bottom: mode card cycling INTERVAL / CHORD / SING / DUET / SETUP via
+  UP/DOWN (v1.3 adds DUET)
 - UP/DOWN click: switch mode card; OK click: enter mode; OK long: nothing
 
 QUIZ
@@ -106,6 +137,17 @@ SING
 - OK starts 3 s attempt; live marker; PASS -> "+2 XP" flash -> next note
 - 3 fails -> device plays target (show answer) -> next note
 
+DUET (v1.3, five states)
+- READY: "DUET" + stage harmony hint (UNISON / 3RD / 6TH / VOICE-LEAD);
+  OK starts the capture round
+- LISTEN: live note count + running note names; capture auto-ends (see
+  3.3); OK long cancels back to READY
+- REVIEW: transcription (up to 12 note names) + inferred key ("C maj");
+  OK = play the duet, UP = re-sing the phrase
+- PLAY: melody + harmony play; the pet hops once per note (frame swap);
+  ends -> DONE
+- DONE: "+3 XP" + key recap + lifetime duet count; OK -> next round
+
 RESULT (after 10 quiz questions)
 - "SCORE 8/10" + "+9 XP" + pet hop anim; OK -> HOME
 
@@ -118,12 +160,12 @@ Global: 10 s idle -> backlight 30%; any key -> 100%. Implemented in ear_ui.
 
 ## 6. Button Map (uniform)
 
-| Input | HOME | QUIZ | SING | RESULT | SETUP |
-|---|---|---|---|---|---|
-| UP/DOWN click | switch card | move cursor | UP=replay | - | select/adjust |
-| OK click | enter mode | confirm answer | start attempt | to HOME | save+back |
-| OK long | - | quit session | quit | - | RESET row: reset |
-| UP long | - | replay audio | - | - | - |
+| Input | HOME | QUIZ | SING | DUET | RESULT | SETUP |
+|---|---|---|---|---|---|---|
+| UP/DOWN click | switch card | move cursor | UP=replay | UP=re-sing | - | select/adjust |
+| OK click | enter mode | confirm answer | start attempt | start/confirm/play-next | to HOME | save+back |
+| OK long | - | quit session | quit | quit | - | RESET row: reset |
+| UP long | - | replay audio | - | - | - | - |
 
 OK-long quit never revokes earned XP (XP booked + NVS-written at the moment
 of each correct answer / PASS).
@@ -131,7 +173,8 @@ of each correct answer / PASS).
 ## 7. Data & Persistence
 
 NVS namespace earbuddy: xp u32; ilvl/clvl/slvl u8 (1-3); vol u8 (0-100);
-answered u32; sing_pass u32; best_combo u8 (lifetime stats, v1.2).
+answered u32; sing_pass u32; best_combo u8 (lifetime stats, v1.2);
+duets u32 key "du" (lifetime duets, v1.3 — old records default to 0).
 Read failure -> defaults (new pet). Write on XP change (1-2x per session,
 NVS wear is a non-issue) and on settings change. Write failure -> log only.
 
@@ -145,6 +188,8 @@ main/
   ear_pet.c/h       - [PURE] XP->stage mapping / feed / evolve checks
   ear_pitch.c/h     - [PURE] autocorrelation f0 + interpolation + conf +
                       cents + note-name helper
+  ear_duet.c/h      - [PURE] phrase segmentation / key inference /
+                      stage-gated harmony line (v1.3)
   ear_tone.c/h      - [PURE] additive synth into int16 buffer (C4-A4 table)
   ear_store.c/h     - NVS load/save (namespace earbuddy)
   ear_audio.c/h     - audio worker task: play queue + mic->pitch->event queue

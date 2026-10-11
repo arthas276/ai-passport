@@ -2,7 +2,7 @@
 // (BSP rule: PCM IO blocks; format changes must go through the close/open
 // sequence, so playback and capture at the same 16 kHz still never overlap).
 #include "ear_audio.h"
-#include "ear_audio.h"
+#include "ear_duet.h"
 #include "bsp_audio.h"
 #include "bsp_display.h" // not used here; events go through the queue
 #include "esp_log.h"
@@ -29,6 +29,8 @@ typedef struct {
     uint8_t kind;
     float target_hz;
     float tol_cents;
+    ear_duet_phrase_t phrase;        // CMD_DUET_PLAY payload (v1.3)
+    uint8_t harmony[EAR_DUET_MAX_NOTES];
 } ear_job_t;
 
 #define CMD_QUIT 0
@@ -37,6 +39,8 @@ typedef struct {
 #define CMD_CUE 3
 #define CMD_SING 4
 #define CMD_CANCEL_SING 5
+#define CMD_DUET_CAP 6
+#define CMD_DUET_PLAY 7
 #define CUE_MAX_NOTES 8
 
 // Worker state. s_task/s_stopped follow the demo_audio.c ownership pattern:
@@ -173,6 +177,99 @@ static void run_sing(float target_hz, float tol_cents) {
     xQueueSend(s_event_q, &ev, 0);
 }
 
+// ---- duet (v1.3) ----
+static void post_play_done(void);   // defined below; duet playback ends with it
+// Worker-owned transcription of the last capture; the UI reads it after
+// EAR_AUDIO_EV_DUET_PHRASE and it stays valid until the next capture.
+static ear_duet_phrase_t s_duet_phrase;
+
+// Capture one phrase: same 16 kHz chain as run_sing (octave-safe detector +
+// median-3), frames feed the live segmenter. Posts EV_PITCH per frame
+// (pct = confirmed note count for the live counter), EV_DUET_PHRASE at end.
+static void run_duet_capture(void) {
+    if (bsp_audio_set_format(EAR_PITCH_SR, 16, 1) != ESP_OK) {
+        ear_audio_event_t ev = { .kind = EAR_AUDIO_EV_DUET_PHRASE, .pct = 0 };
+        xQueueSend(s_event_q, &ev, 0);
+        return;
+    }
+    static int16_t frame[EAR_PITCH_FRAME];
+    ear_duet_seg_t seg;
+    ear_duet_seg_init(&seg);
+    memset(&s_duet_phrase, 0, sizeof(s_duet_phrase));
+    float f1 = 0.0f, f2 = 0.0f;
+    int hist = 0;
+    bool stop = false;
+    for (uint32_t fr = 0; fr < EAR_DUET_MAX_FRAMES && !stop && !s_cancel;
+         fr++) {
+        if (bsp_audio_read(frame, EAR_PITCH_FRAME * 2) != ESP_OK) break;
+        ear_pitch_result_t pr = ear_pitch_detect(frame, EAR_PITCH_FRAME);
+        float f0 = pr.hz;
+        if (hist >= 2) f0 = ear_pitch_median3(f1, f2, pr.hz);
+        f1 = f2; f2 = pr.hz;
+        if (hist < 2) hist++;
+        stop = ear_duet_seg_feed(&seg, f0, &s_duet_phrase);
+        ear_audio_event_t ev = {
+            .kind = EAR_AUDIO_EV_PITCH, .hz = f0, .conf = pr.conf,
+            .pct = s_duet_phrase.count,
+        };
+        xQueueSend(s_event_q, &ev, 0);
+    }
+    ear_duet_seg_finish(&seg, &s_duet_phrase);
+    ear_audio_event_t ev = {
+        .kind = EAR_AUDIO_EV_DUET_PHRASE, .pct = s_duet_phrase.count,
+    };
+    xQueueSend(s_event_q, &ev, 0);
+}
+
+// One duet note: melody (amp 0.9) + harmony (amp 0.55) on two synth voices,
+// chunk-rendered exactly like the chord path of play_question.
+static void play_duet_pair(uint8_t melody, uint8_t harmony, int ms) {
+    ear_tone_voice_t vo[2];
+    int16_t tmp[CHUNK];
+    static int16_t out[CHUNK];
+    int total = EAR_TONE_SR * ms / 1000u;
+    ear_tone_start(&vo[0], ear_note_freq(melody), 0.9f, total);
+    ear_tone_start(&vo[1], ear_note_freq(harmony), 0.55f, total);
+    int left = total;
+    while (left > 0 && !s_cancel) {
+        int n = left < CHUNK ? left : CHUNK;
+        memset(out, 0, n * 2);
+        for (int i = 0; i < 2; i++) {
+            ear_tone_render(&vo[i], tmp, n);
+            ear_tone_mix(out, tmp, n);
+        }
+        bsp_audio_write(out, n * 2);
+        left -= n;
+    }
+}
+
+// Duet playback: per captured note (duration clamped 200..900 ms + 80 ms
+// gap), one DUET_NOTE tick for the pet hop, PLAY_DONE at the end.
+#define DUET_NOTE_MIN_MS 200
+#define DUET_NOTE_MAX_MS 900
+#define DUET_GAP_MS      80
+
+static void run_duet_play(const ear_job_t *job) {
+    if (bsp_audio_set_format(EAR_TONE_SR, 16, 1) != ESP_OK) {
+        post_play_done();
+        return;
+    }
+    bsp_audio_set_volume(s_volume);
+    const ear_duet_phrase_t *p = &job->phrase;
+    for (uint8_t i = 0; i < p->count && !s_cancel; i++) {
+        ear_audio_event_t ev = {
+            .kind = EAR_AUDIO_EV_DUET_NOTE, .pct = (uint8_t)(i + 1),
+        };
+        xQueueSend(s_event_q, &ev, 0);
+        int ms = p->notes[i].ms;
+        if (ms < DUET_NOTE_MIN_MS) ms = DUET_NOTE_MIN_MS;
+        if (ms > DUET_NOTE_MAX_MS) ms = DUET_NOTE_MAX_MS;
+        play_duet_pair(p->notes[i].midi, job->harmony[i], ms);
+        if (i + 1 < p->count) play_gap(DUET_GAP_MS);
+    }
+    post_play_done();
+}
+
 // Post PLAY_DONE to the app (unless the event queue is full - UI polls the
 // screen state, a dropped event would stall the flow, so this must send).
 static void post_play_done(void) {
@@ -218,6 +315,12 @@ static void audio_task(void *arg) {
             // run_sing handles set_format(16 kHz) itself; calling it twice
             // would trigger the codec close/open sequence for nothing.
             run_sing(job.target_hz, job.tol_cents);
+            break;
+        case CMD_DUET_CAP:
+            run_duet_capture();
+            break;
+        case CMD_DUET_PLAY:
+            run_duet_play(&job);
             break;
         case CMD_QUIT:
             xSemaphoreGive(s_stopped);
@@ -279,6 +382,22 @@ void ear_audio_sing_start(float target_hz, float tol_cents) {
         .cmd = CMD_SING, .target_hz = target_hz, .tol_cents = tol_cents,
     };
     xQueueSend(s_job_q, &job, 0);
+}
+
+void ear_audio_duet_capture(void) {
+    ear_job_t job = { .cmd = CMD_DUET_CAP };
+    xQueueSend(s_job_q, &job, 0);
+}
+
+void ear_audio_duet_play(const ear_duet_phrase_t *p,
+                         const uint8_t harmony[EAR_DUET_MAX_NOTES]) {
+    ear_job_t job = { .cmd = CMD_DUET_PLAY, .phrase = *p };
+    memcpy(job.harmony, harmony, EAR_DUET_MAX_NOTES);
+    xQueueSend(s_job_q, &job, 0);
+}
+
+const ear_duet_phrase_t *ear_audio_duet_phrase(void) {
+    return &s_duet_phrase;
 }
 
 // Cancel must bypass the job queue: the worker is busy inside run_sing and

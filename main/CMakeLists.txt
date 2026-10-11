@@ -3,6 +3,7 @@ idf_component_register(
          "ear_model.c"
          "ear_pet.c"
          "ear_pitch.c"
+         "ear_duet.c"
          "ear_tone.c"
          "ear_assets.c"
          "ear_store.c"

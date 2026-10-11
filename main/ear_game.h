@@ -28,6 +28,7 @@ typedef enum {
 #define EAR_XP_PERFECT      3u   // bonus when session ends 10/10
 // Note: no per-day caps: no RTC, no date features (PRD 2).
 #define EAR_XP_SING_PASS    2u   // per PASSed sing attempt
+#define EAR_XP_DUET          3u   // per performed duet round (v1.3)
 
 // ---------------------------------------------------------------------------
 // Quiz model

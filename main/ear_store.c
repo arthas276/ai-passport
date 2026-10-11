@@ -16,6 +16,7 @@ void ear_store_load(ear_save_t *out) {
     out->vol = 80;
     out->answered = 0;
     out->sing_pass = 0;
+    out->duets = 0;
     out->best_combo = 0;
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
@@ -31,6 +32,7 @@ void ear_store_load(ear_save_t *out) {
     if (nvs_get_u8(h, "vol", &v) == ESP_OK && v <= 100) out->vol = v;
     if (nvs_get_u32(h, "ans", &cnt) == ESP_OK) out->answered = cnt;
     if (nvs_get_u32(h, "sng", &cnt) == ESP_OK) out->sing_pass = cnt;
+    if (nvs_get_u32(h, "du", &cnt) == ESP_OK) out->duets = cnt;
     if (nvs_get_u8(h, "cmb", &v) == ESP_OK) out->best_combo = v;
     nvs_close(h);
 }
@@ -45,6 +47,7 @@ void ear_store_save(const ear_save_t *s) {
     nvs_set_u8(h, "vol", s->vol);
     nvs_set_u32(h, "ans", s->answered);
     nvs_set_u32(h, "sng", s->sing_pass);
+    nvs_set_u32(h, "du", s->duets);
     nvs_set_u8(h, "cmb", s->best_combo);
     nvs_commit(h);
     nvs_close(h);

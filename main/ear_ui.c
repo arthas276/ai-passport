@@ -2,6 +2,7 @@
 // bsp_lvgl_lock (from the input task in main.c).
 #include "ear_ui.h"
 #include "ear_assets.h"
+#include "ear_duet.h"
 #include "ear_store.h"
 #include "bsp_display.h"
 #include "bsp_battery.h"
@@ -31,7 +32,7 @@ static bool s_evolve_pending;    // stage changed, celebrate at HOME entry
 
 // ---- current screen ----
 typedef enum {
-    SCR_HOME, SCR_QUIZ, SCR_SING, SCR_RESULT, SCR_SETUP,
+    SCR_HOME, SCR_QUIZ, SCR_SING, SCR_DUET, SCR_RESULT, SCR_SETUP,
 } ear_screen_t;
 static ear_screen_t s_scr;
 
@@ -54,6 +55,7 @@ static lv_obj_t *q_footer;
 static uint8_t s_cursor;          // selected quiz option index
 static lv_obj_t *sg_scr, *sg_note, *sg_scale, *sg_marker, *sg_hold;
 static lv_obj_t *sg_status, *sg_hint;
+static lv_obj_t *d_scr, *d_title, *d_pet, *d_notes, *d_key, *d_status, *d_hint;
 static lv_obj_t *r_scr, *r_score, *r_xp, *r_tot;
 static lv_obj_t *s1_scr, *s1_vol, *s1_reset, *s1_hint, *s1_batt;
 
@@ -111,12 +113,15 @@ static void enter_result(void);
 static void enter_result_common(uint8_t score, uint8_t total, uint32_t xp);
 static void grade_answer(void);
 static void enter_sing(void);
+static void enter_duet(void);
 static void enter_setup(void);
 
 // ---- HOME ----
-// Mode card names (index = s_mode_card: 0 INTERVAL 1 CHORD 2 SING 3 SETUP).
-static const char *MODE_NAMES[4] = {
-    "MODE: INTERVAL", "MODE: CHORD", "MODE: SING", "MODE: SETUP",
+// Mode card names (index = s_mode_card: 0 INTERVAL 1 CHORD 2 SING 3 DUET
+// 4 SETUP).
+static const char *MODE_NAMES[5] = {
+    "MODE: INTERVAL", "MODE: CHORD", "MODE: SING", "MODE: DUET",
+    "MODE: SETUP",
 };
 
 // Battery text: --% when CW2017 read fails (graceful degrade).
@@ -541,6 +546,201 @@ static void sing_audio(ear_audio_event_t *ev) {
     }
 }
 
+// ---- DUET (v1.3, PRD 3.3) ----
+// Five states on one screen: READY -> LISTEN -> REVIEW -> PLAY -> DONE.
+static uint8_t s_duet_state;
+#define DUET_READY  0u
+#define DUET_LISTEN 1u
+#define DUET_REVIEW 2u
+#define DUET_PLAY   3u
+#define DUET_DONE   4u
+static ear_duet_key_t s_duet_key;
+static uint8_t s_duet_harmony[EAR_DUET_MAX_NOTES];
+static uint8_t s_duet_pet_frame;
+
+// Note label for any MIDI value (ear_note_name only covers C4-A4):
+// "C4", "A#3", ... into out (>= 5 bytes).
+static void duet_note_label(char *out, size_t n, uint8_t midi) {
+    snprintf(out, n, "%s%u", ear_duet_pc_name(midi % 12),
+             (unsigned)(midi / 12 - 1));
+}
+
+// Harmony tier text shown on READY/DONE, gated by pet stage (PRD 3.3).
+static const char *duet_tier_text(void) {
+    switch (ear_pet_stage(s_save.xp)) {
+    case EAR_STAGE_EGG:
+    case EAR_STAGE_HATCHLING: return "HARMONY: UNISON";
+    case EAR_STAGE_CHICK:     return "HARMONY: 3RD";
+    case EAR_STAGE_FLEDGLING: return "HARMONY: 6TH";
+    default:                  return "HARMONY: VOICE-LEAD";
+    }
+}
+
+static void duet_refresh_ready(void) {
+    s_duet_state = DUET_READY;
+    lbl(d_title, duet_tier_text(), C_GOLD);
+    lbl(d_notes, "SING A PHRASE 2-4s", C_TEXT);
+    lbl(d_key, "", C_MUTED);
+    lbl(d_status, "", C_TEXT);
+    lbl(d_hint, "OK SING  OKL EXIT", C_MUTED);
+    lv_image_set_src(d_pet,
+        &EAR_PET_IMG[ear_pet_stage(s_save.xp)][0]);
+    lv_obj_set_y(d_pet, 84);
+}
+
+static void enter_duet(void) {
+    if (d_scr) { lv_obj_delete(d_scr); d_scr = NULL; }
+    s_scr = SCR_DUET;
+    d_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(d_scr, lv_color_hex(C_BG), 0);
+
+    d_title = lv_label_create(d_scr);
+    lv_obj_set_style_text_font(d_title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(d_title, lv_color_hex(C_GOLD), 0);
+    lv_obj_align(d_title, LV_ALIGN_TOP_MID, 0, 14);
+
+    d_pet = lv_image_create(d_scr);
+    lv_obj_align(d_pet, LV_ALIGN_TOP_MID, 0, 84);
+
+    d_notes = lv_label_create(d_scr);
+    lv_obj_set_style_text_font(d_notes, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(d_notes, lv_color_hex(C_TEXT), 0);
+    lv_obj_set_width(d_notes, 220);
+    lv_obj_set_style_text_align(d_notes, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(d_notes, LV_ALIGN_TOP_MID, 0, 150);
+
+    d_key = lv_label_create(d_scr);
+    lv_obj_set_style_text_font(d_key, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(d_key, lv_color_hex(C_CYAN), 0);
+    lv_obj_align(d_key, LV_ALIGN_TOP_MID, 0, 205);
+
+    d_status = lv_label_create(d_scr);
+    lv_obj_set_style_text_font(d_status, &lv_font_montserrat_20, 0);
+    lv_obj_align(d_status, LV_ALIGN_TOP_MID, 0, 240);
+
+    d_hint = lv_label_create(d_scr);
+    lv_obj_set_style_text_font(d_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(d_hint, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(d_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_screen_load(d_scr);
+    s_duet_pet_frame = 0;
+    duet_refresh_ready();
+}
+
+// Transcription + key into the REVIEW labels; harmony precomputed here so
+// playback is a single worker job.
+static void duet_review(void) {
+    const ear_duet_phrase_t *p = ear_audio_duet_phrase();
+    ear_duet_infer_key(p, &s_duet_key);
+    ear_duet_harmony(p, &s_duet_key, ear_pet_stage(s_save.xp),
+                     s_duet_harmony);
+    char line[EAR_DUET_MAX_NOTES * 5];
+    size_t off = 0;
+    line[0] = 0;
+    for (uint8_t i = 0; i < p->count && off + 5 < sizeof(line); i++) {
+        char nb[5];
+        duet_note_label(nb, sizeof(nb), p->notes[i].midi);
+        off += (size_t)snprintf(line + off, sizeof(line) - off,
+                                i ? " %s" : "%s", nb);
+    }
+    lbl(d_notes, line, C_TEXT);
+    char ktxt[24];
+    snprintf(ktxt, sizeof(ktxt), "KEY %s %s%s", ear_duet_pc_name(s_duet_key.tonic),
+             s_duet_key.minor ? "min" : "maj",
+             s_duet_key.fallback ? "?" : "");
+    lbl(d_key, ktxt, C_CYAN);
+    lbl(d_status, "", C_TEXT);
+    lbl(d_hint, "OK PLAY  UP RESING  OKL EXIT", C_MUTED);
+    s_duet_state = DUET_REVIEW;
+}
+
+static void duet_key_ev(bsp_btn_t btn, bsp_btn_ev_t ev) {
+    if (ev == BSP_BTN_LONG) {
+        if (btn == BSP_BTN_OK) {
+            ear_audio_sing_cancel();
+            enter_home();
+        }
+        return;
+    }
+    if (ev != BSP_BTN_CLICK) return;
+    if (btn == BSP_BTN_UP && s_duet_state == DUET_REVIEW) {
+        ear_audio_duet_capture();   // re-sing the phrase
+        s_duet_state = DUET_LISTEN;
+        lbl(d_status, "SING AGAIN 2-4s", C_GOLD);
+        lbl(d_hint, "OKL EXIT", C_MUTED);
+        return;
+    }
+    if (btn != BSP_BTN_OK) return;
+    switch (s_duet_state) {
+    case DUET_READY:
+        ear_audio_duet_capture();
+        s_duet_state = DUET_LISTEN;
+        lbl(d_status, "SING NOW 2-4s", C_GOLD);
+        lbl(d_hint, "OKL EXIT", C_MUTED);
+        break;
+    case DUET_REVIEW:
+        s_duet_state = DUET_PLAY;
+        lbl(d_status, "DUET...", C_CYAN);
+        lbl(d_hint, "OKL EXIT", C_MUTED);
+        ear_audio_duet_play(ear_audio_duet_phrase(), s_duet_harmony);
+        break;
+    case DUET_DONE:
+        duet_refresh_ready();   // next round without rebuilding the screen
+        break;
+    default:
+        break;   // LISTEN/PLAY: capture and playback run to their own ends
+    }
+}
+
+static void duet_audio_ev(ear_audio_event_t *ev) {
+    if (ev->kind == EAR_AUDIO_EV_PITCH && s_duet_state == DUET_LISTEN) {
+        if (ev->hz > 0.0f) {
+            char nb[5];
+            duet_note_label(nb, sizeof(nb), ear_note_from_hz(ev->hz));
+            char t[32];
+            snprintf(t, sizeof(t), "NOTES %u  %s", (unsigned)ev->pct, nb);
+            lbl(d_status, t, C_TEXT);
+        } else {
+            lbl(d_status, "...", C_MUTED);
+        }
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_DUET_PHRASE) {
+        if (ev->pct < EAR_DUET_MIN_NOTES) {
+            lbl(d_status, "TOO SHORT", C_BAD);
+            lbl(d_hint, "OK RETRY  OKL EXIT", C_MUTED);
+            s_duet_state = DUET_READY;   // OK restarts the capture
+            return;
+        }
+        duet_review();
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_DUET_NOTE && s_duet_state == DUET_PLAY) {
+        // Pet hop: alternate sprite frames + a small vertical bounce.
+        s_duet_pet_frame ^= 1u;
+        lv_image_set_src(d_pet,
+            &EAR_PET_IMG[ear_pet_stage(s_save.xp)][s_duet_pet_frame]);
+        lv_obj_set_y(d_pet, s_duet_pet_frame ? 78 : 84);
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_PLAY_DONE && s_duet_state == DUET_PLAY) {
+        s_duet_pet_frame = 0;
+        lv_image_set_src(d_pet,
+            &EAR_PET_IMG[ear_pet_stage(s_save.xp)][0]);
+        lv_obj_set_y(d_pet, 84);
+        award_xp(EAR_XP_DUET);
+        s_save.duets++;               // lifetime stat (v1.3)
+        ear_store_save(&s_save);
+        char t[48];
+        snprintf(t, sizeof(t), "+%u XP  DUETS %lu", (unsigned)EAR_XP_DUET,
+                 (unsigned long)s_save.duets);
+        lbl(d_status, t, C_OK);
+        lbl(d_hint, "OK NEXT ROUND", C_MUTED);
+        s_duet_state = DUET_DONE;
+        ear_audio_play_cue(0);
+    }
+}
+
 // ---- RESULT ----
 // Quiz session end: perfect bonus + auto level adjust, then the shared
 // result page. Sing sessions call enter_result_common directly (v1.2).
@@ -694,20 +894,22 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     case SCR_HOME:
         if (ev != BSP_BTN_CLICK) return;
         if (btn == BSP_BTN_UP) {
-            s_mode_card = (uint8_t)((s_mode_card + 3) % 4);
+            s_mode_card = (uint8_t)((s_mode_card + 4) % 5);
             home_refresh();
         } else if (btn == BSP_BTN_DOWN) {
-            s_mode_card = (uint8_t)((s_mode_card + 1) % 4);
+            s_mode_card = (uint8_t)((s_mode_card + 1) % 5);
             home_refresh();
         } else if (btn == BSP_BTN_OK) {
             if (s_mode_card == 0) enter_quiz(EAR_MODE_INTERVAL);
             else if (s_mode_card == 1) enter_quiz(EAR_MODE_CHORD);
             else if (s_mode_card == 2) enter_sing();
+            else if (s_mode_card == 3) enter_duet();
             else enter_setup();
         }
         break;
     case SCR_QUIZ: quiz_key(btn, ev); break;
     case SCR_SING: sing_key(btn, ev); break;
+    case SCR_DUET: duet_key_ev(btn, ev); break;
     case SCR_RESULT: result_key(btn, ev); break;
     case SCR_SETUP: setup_key(btn, ev); break;
     }
@@ -719,6 +921,7 @@ void ear_ui_handle_audio(ear_audio_event_t *ev) {
     switch (s_scr) {
     case SCR_QUIZ: quiz_audio(ev); break;
     case SCR_SING: sing_audio(ev); break;
+    case SCR_DUET: duet_audio_ev(ev); break;
     default: break;   // HOME/RESULT/SETUP ignore worker events
     }
 }

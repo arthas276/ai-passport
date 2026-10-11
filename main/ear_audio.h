@@ -1,6 +1,7 @@
 // ear_audio.h - audio worker: playback + mic pitch pipeline.
 #pragma once
 #include "ear_game.h"
+#include "ear_duet.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -11,6 +12,9 @@ typedef enum {
     EAR_AUDIO_EV_PITCH,      // live frame: hz/conf/cents valid
     EAR_AUDIO_EV_SING_PASS,
     EAR_AUDIO_EV_SING_FAIL,
+    EAR_AUDIO_EV_DUET_PHRASE, // duet capture done: pct = confirmed notes;
+                              // read the phrase via ear_audio_duet_phrase()
+    EAR_AUDIO_EV_DUET_NOTE,   // duet playback tick: pct = note index + 1
 } ear_audio_event_kind_t;
 
 typedef struct {
@@ -32,3 +36,14 @@ void ear_audio_play_cue(int cue_id);   // 0=correct 1=wrong 2=evolve
 // ---- sing mode ----
 void ear_audio_sing_start(float target_hz, float tol_cents);
 void ear_audio_sing_cancel(void);
+
+// ---- duet mode (v1.3) ----
+// Capture one phrase (same 16 kHz chain as sing). The transcription lands
+// in worker-owned storage and is valid until the next capture starts.
+void ear_audio_duet_capture(void);
+// Play melody + harmony as one job; posts EAR_AUDIO_EV_DUET_NOTE per note
+// (for the pet hop) and PLAY_DONE at the end.
+void ear_audio_duet_play(const ear_duet_phrase_t *p,
+                         const uint8_t harmony[EAR_DUET_MAX_NOTES]);
+// Phrase captured by the last ear_audio_duet_capture() (worker-owned).
+const ear_duet_phrase_t *ear_audio_duet_phrase(void);
