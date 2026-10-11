@@ -32,7 +32,7 @@ Single screen (redesigned UI, not the demo shell) with five modes cycled by
 holding OK: CHROMATIC (default), GUITAR (E2 A2 D3 G3 B3 E4), UKULELE
 (G4 C4 E4 A4, reentrant), VIOLIN (G3 D4 A4 E5), and VOICE.
 
-- Top: "TUNER · <MODE>" title; battery % top-right
+- Top: "TUNER • <MODE>" title; battery % top-right
 - Center: the note name at Montserrat 48 - the current target string in
   instrument modes, the nearest note otherwise; "--" when unvoiced.
   Aux line: "STR n/6" in instrument modes, "RANGE C3-A4" in VOICE (session

@@ -92,7 +92,7 @@ static float reference_cents(const tuner_event_t *ev, int16_t *ref_midi) {
 
 static void refresh_mode_ui(void) {
     char t[32];
-    snprintf(t, sizeof(t), "TUNER · %s", tuner_mode_name(s_mode));
+    snprintf(t, sizeof(t), "TUNER • %s", tuner_mode_name(s_mode));
     lv_label_set_text(s_title, t);
     if (tuner_mode_string_count(s_mode) > 0) {
         snprintf(t, sizeof(t), "STR %d/%d", s_strings.index + 1,

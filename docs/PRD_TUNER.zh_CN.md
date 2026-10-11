@@ -32,7 +32,7 @@
 CHROMATIC 纯半音（默认）、GUITAR（E2 A2 D3 G3 B3 E4）、UKULELE
 （G4 C4 E4 A4，reentrant）、VIOLIN（G3 D4 A4 E5）、VOICE 哼唱。
 
-- 顶部："TUNER · <模式>" 标题；右上角电量
+- 顶部："TUNER • <模式>" 标题；右上角电量
 - 中央：Montserrat 48 大字音名——弦模式显示当前目标弦，其余显示最近
   音；无声时 "--"。辅助行：弦模式 "STR n/6"，VOICE 模式 "RANGE C3-A4"
   （本次会话所有有声帧的最低/最高音）。下方 Montserrat 20 显示频率
