@@ -16,9 +16,10 @@ typedef enum {
 typedef struct {
     ear_audio_event_kind_t kind;
     float hz;       // EV_PITCH: detected f0 (0 = unvoiced)
-    float cents;    // EV_PITCH: deviation from target
+    float cents;    // EV_PITCH: octave-equivalent deviation from target
     float conf;     // ear_pitch_detect confidence
     uint8_t pct;    // sing attempt progress 0..100 (time or hold)
+    int8_t oct;     // EV_PITCH: folded octaves (0 = same octave, -1 = low)
 } ear_audio_event_t;
 
 // Create the worker task. event_q receives ear_audio_event_t.

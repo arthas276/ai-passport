@@ -5,7 +5,7 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.0
+> PRD version: v1.2 (2026-10-11: octave-safe pitch picking, median-3 f0 smoothing, sing tolerance re-tune, battery gauge diagnostics, octave-equivalent sing grading, two-hold reset confirmation, 5-note sing sessions with a shared result page, lifetime stats)
 > Date: 2026-09-28
 > Mode: user pre-authorized autonomous overnight build; AI made the listed
 > default decisions; on-device verification planned next evening with user.
@@ -29,7 +29,9 @@
   needs lv_font_conv (node.js), deferred, listed under Unverified
 - ES8311: sample-rate switching via bsp_audio_set_format (close/open inside);
   blocking PCM; all audio ops serialize on one worker task
-- Battery top-right per repo default convention (bsp_battery_soc(), -1 -> --%)
+- Battery top-right per repo default convention (bsp_battery_soc(), -1 -> --%);
+  SETUP also shows SOC% + cell voltage (v1.1) because the CW2017 profile is
+  provisional and not yet characterized against the real cell
 - 10 s idle -> backlight 30%, any key restores 100% (repo power convention)
 
 ## 3. Modes & Rules
@@ -46,21 +48,29 @@
 - Auto level per mode: session score >= 8 -> level up (max 3); <= 4 -> down
   (min 1); persisted in NVS
 - Combo counter display-only (no XP effect)
-- Tone: additive synthesis (f + 0.32*2f + 0.12*3f), fast attack, gentle decay
-  + 8 ms release, 16000 Hz 16-bit mono (board-validated rate; 22050 distorts);
-  interval = two notes 450 ms + 90 ms gap; chord = three
-  notes together 900 ms; roots C4-A4 (261.6-440 Hz, tiny-speaker friendly)
+- Tone: additive synthesis (f + 0.40*2f + 0.18*3f, v1.3 re-tint), fast
+  attack, gentle decay to ~64% + 8 ms release, 16000 Hz 16-bit mono
+  (board-validated rate; 22050 distorts); interval = two notes 650 ms +
+  120 ms gap; chord = three notes together 1250 ms; sing target preview
+  950 ms (v1.3: longer, fuller per user request); roots C4-A4 (261.6-440
+  Hz, tiny-speaker friendly)
 
 ### 3.2 Sing mode
 
 - Play target note (C4-A4), show note name, UP replays target, OK starts
   listening (max 4 s)
-- 16 kHz capture -> 1024-pt autocorrelation f0 (65-600 Hz) -> median-3 ->
+- 16 kHz capture -> 1024-pt autocorrelation f0 (65-600 Hz; earliest-peak +
+  integer-divisor octave-safe selection, v1.1/v1.3) -> median-3 smoothing ->
   cents = 1200*log2(f0/f_target)
 - PASS if |cents| <= tolerance held for 1.0 s within the 4 s window;
-  tolerance L1 +/-65, L2 +/-45, L3 +/-30 cents; PASS -> +2 XP
+  tolerance L1 +/-80, L2 +/-55, L3 +/-35 cents (v1.1 re-tune: 65/45/30 still
+  stalled beginners once the detector was fixed); PASS -> +2 XP
+- Octave-equivalent grading (v1.2): cents fold into +/-600, so the correct
+  pitch class in any octave passes; the SING status shows an OCT-LOW/
+  OCT-HIGH hint when folded
 - 3 failed attempts -> device plays the target note (show answer) -> next
-  note; a sing session = 5 notes
+  note; a sing session = 5 notes, then the shared RESULT page with lifetime
+  totals (v1.2)
 - Playback and capture both 16 kHz; format switch via bsp_audio_set_format
   serialized on the single audio worker (BSP constraint)
 
@@ -120,7 +130,8 @@ of each correct answer / PASS).
 
 ## 7. Data & Persistence
 
-NVS namespace earbuddy: xp u32; ilvl/clvl/slvl u8 (1-3); vol u8 (0-100).
+NVS namespace earbuddy: xp u32; ilvl/clvl/slvl u8 (1-3); vol u8 (0-100);
+answered u32; sing_pass u32; best_combo u8 (lifetime stats, v1.2).
 Read failure -> defaults (new pet). Write on XP change (1-2x per session,
 NVS wear is a non-issue) and on settings change. Write failure -> log only.
 
@@ -170,11 +181,11 @@ gcc -std=c11 -Wall -Wextra -Werror. Registered in tools/validate.sh
 | Range | C4-A4 | tiny-speaker friendly + standard ear-training range |
 | Wrong answers | no penalty | no-punishment principle |
 | Stage thresholds | 10/30/80/160 XP | ~2-3 weeks daily practice to max |
-| Sing tolerance | +/-65/45/30 cents | device pass: +/-50 too tight vs detector jitter; L1 just under a semitone |
+| Sing tolerance | +/-80/55/35 cents | v1.1: 65/45/30 (itself raised from 50) still stalled beginners; loosened one notch after the octave fix |
 | 3 fails -> show answer | yes | avoid stuck states |
 | OK-long quit keeps XP | yes | no-punishment principle |
 | Idle backlight 30% after 10 s | yes | repo power convention |
-| RESET = OK long on row | yes | second-confirm page deferred |
+| RESET = two OK holds within 5 s | v1.2 | one accidental 500 ms hold wiped a pet on device 2026-10-11 |
 
 ## 11. Delivery Report Format
 

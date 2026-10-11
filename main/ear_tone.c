@@ -11,15 +11,17 @@
 // Sine at amp=1 peaks at 8500 (~-11.7 dBFS) — keeps the small speaker in its
 // linear range; chords (3 voices at amp 0.55) sum to ~12k peak, no clipping.
 #define EAR_TONE_LEVEL 8500
-// Partial weights Q15: sine-dominant; higher partials only tint (the tiny
-// speaker turns strong upper partials into harshness).
+// Partial weights Q15: sine-dominant; higher partials tint fullness without
+// turning harsh on the tiny speaker (v1.3: 0.32/0.12 -> 0.40/0.18 per user
+// request for a fuller quiz tone).
 #define W1_Q15 32767
-#define W2_Q15 10486    // 0.32
-#define W3_Q15 3932     // 0.12
+#define W2_Q15 13107    // 0.40
+#define W3_Q15 5898     // 0.18
 
-// Envelope: linear attack, gentle exponential decay to ~45% at note end (a
-// sustained tone is a steadier pitch reference than a dying one), linear
-// release over the last 8 ms so notes don't end in a click.
+// Envelope: linear attack, gentle exponential decay to ~64% at note end (a
+// sustained tone is a steadier pitch reference than a dying one; v1.3 slows
+// the decay from ~45% for a fuller feel), linear release over the last 8 ms
+// so notes don't end in a click.
 #define EAR_TONE_ATK (8u * (EAR_TONE_SR / 1000u))   // 8 ms attack in samples
 #define EAR_TONE_REL (8u * (EAR_TONE_SR / 1000u))   // 8 ms release in samples
 
@@ -54,7 +56,7 @@ void ear_tone_start(ear_tone_voice_t *v, float hz, float amp, uint32_t total) {
     v->step = (uint32_t)((uint64_t)(hz * 4294967296.0f) / EAR_TONE_SR);
     v->gain = (int32_t)(amp * (float)EAR_TONE_LEVEL);
     v->env = 0;
-    v->decay = (int32_t)(expf(-0.8f / (float)(total > EAR_TONE_ATK
+    v->decay = (int32_t)(expf(-0.45f / (float)(total > EAR_TONE_ATK
                                              ? total - EAR_TONE_ATK : 1)) *
                          32767.0f);
     v->atk_step = 32767 / (int32_t)EAR_TONE_ATK;

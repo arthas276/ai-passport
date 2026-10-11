@@ -92,6 +92,12 @@ void app_main(void) {
     // bsp_battery_soc() keeps returning -1 and HOME shows "--%" (graceful).
     if (bsp_battery_init() != ESP_OK) {
         ESP_LOGW(TAG, "battery gauge init failed (HOME will show --%%)");
+    } else {
+        // Gauge diagnostics (v1.1): the CW2017 profile is provisional, so log
+        // SOC beside cell voltage for serial_peek captures - divergence tells
+        // us the profile needs recalibration against the real cell.
+        ESP_LOGI(TAG, "battery: soc=%d%% vcell=%dmV",
+                 bsp_battery_soc(), bsp_battery_mv());
     }
 
     // Display is mandatory: without it there is no app. Fail loudly.

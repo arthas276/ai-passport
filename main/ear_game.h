@@ -125,6 +125,11 @@ uint32_t ear_pet_stage_ceiling(uint32_t xp);
 // Detect F0 of one frame. Returns hz (0 when unvoiced/uncertain) + confidence.
 typedef struct { float hz; float conf; } ear_pitch_result_t;
 ear_pitch_result_t ear_pitch_detect(const int16_t *pcm, int n);
+// Median of the last three raw detections (sing smoothing, PRD 3.2).
+float ear_pitch_median3(float a, float b, float c);
+// Octave-equivalent cents: wraps into [-600, +600); *octaves = folded count
+// (negative = sung below the target octave). v1.1 sing grading.
+float ear_pitch_octave_cents(float cents, int8_t *octaves);
 // Cents deviation from target. |cents| <= tol defines "in tune".
 float ear_pitch_cents(float f0, float target_hz);
 // Nearest MIDI note number for a frequency (rounds to nearest semitone).

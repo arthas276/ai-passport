@@ -15,10 +15,10 @@
 static const char *TAG = "ear_audio";
 
 #define CHUNK 512                    // render/read chunk in samples
-#define NOTE_MS 450                  // interval note length
-#define GAP_MS 90                    // gap between interval notes
-#define CHORD_MS 900                 // chord length
-#define TARGET_MS 700                // sing target preview length
+#define NOTE_MS 650                  // interval note length (v1.3: longer)
+#define GAP_MS 120                   // gap between interval notes
+#define CHORD_MS 1250                // chord length (v1.3: longer)
+#define TARGET_MS 950                // sing target preview length (v1.3)
 #define SING_WINDOW_MS 4000          // attempt window
 #define SING_HOLD_MS 1000            // in-tune time needed for PASS
 
@@ -136,12 +136,22 @@ static void run_sing(float target_hz, float tol_cents) {
     static int16_t frame[EAR_PITCH_FRAME];
     const int frame_ms = (int)(EAR_PITCH_FRAME * 1000 / EAR_PITCH_SR);  // 64 ms
     int hold = 0, elapsed = 0;
+    float f1 = 0.0f, f2 = 0.0f;   // last two raw detections; median-3 keeps
+    int hist = 0;                 // one glitch frame from killing the hold
     while (elapsed < SING_WINDOW_MS && !s_cancel) {
         if (bsp_audio_read(frame, EAR_PITCH_FRAME * 2) != ESP_OK) break;
         ear_pitch_result_t pr = ear_pitch_detect(frame, EAR_PITCH_FRAME);
         elapsed += frame_ms;
-        float cents = ear_pitch_cents(pr.hz, target_hz);
-        bool in_tune = (pr.hz > 0.0f) && (cents <= tol_cents) && (cents >= -tol_cents);
+        float f0 = pr.hz;
+        if (hist >= 2) f0 = ear_pitch_median3(f1, f2, pr.hz);
+        f1 = f2; f2 = pr.hz;
+        if (hist < 2) hist++;
+        // Octave-equivalent grading (v1.1): the right pitch class in any
+        // octave counts; the UI gets the folded count for an OCT hint.
+        int8_t oct = 0;
+        float cents = ear_pitch_octave_cents(ear_pitch_cents(f0, target_hz),
+                                             &oct);
+        bool in_tune = (f0 > 0.0f) && (cents <= tol_cents) && (cents >= -tol_cents);
         if (in_tune) {
             hold += frame_ms;
             if (hold >= SING_HOLD_MS) {
@@ -153,8 +163,9 @@ static void run_sing(float target_hz, float tol_cents) {
             hold = 0;
         }
         ear_audio_event_t ev = {
-            .kind = EAR_AUDIO_EV_PITCH, .hz = pr.hz, .conf = pr.conf,
+            .kind = EAR_AUDIO_EV_PITCH, .hz = f0, .conf = pr.conf,
             .cents = cents, .pct = (uint8_t)(hold * 100 / SING_HOLD_MS),
+            .oct = oct,
         };
         xQueueSend(s_event_q, &ev, 0);
     }

@@ -9,6 +9,9 @@ typedef struct {
     uint8_t clvl;     // CHORD level 1..3
     uint8_t slvl;     // SING level 1..3
     uint8_t vol;      // volume 0..100
+    uint32_t answered;   // lifetime correct quiz answers (v1.2)
+    uint32_t sing_pass;  // lifetime sing passes (v1.2)
+    uint8_t best_combo;  // lifetime best combo (v1.2)
 } ear_save_t;
 
 // Load progress; on any failure fills defaults (new pet). Never fails hard.

@@ -54,8 +54,8 @@ static lv_obj_t *q_footer;
 static uint8_t s_cursor;          // selected quiz option index
 static lv_obj_t *sg_scr, *sg_note, *sg_scale, *sg_marker, *sg_hold;
 static lv_obj_t *sg_status, *sg_hint;
-static lv_obj_t *r_scr, *r_score, *r_xp;
-static lv_obj_t *s1_scr, *s1_vol, *s1_reset, *s1_hint;
+static lv_obj_t *r_scr, *r_score, *r_xp, *r_tot;
+static lv_obj_t *s1_scr, *s1_vol, *s1_reset, *s1_hint, *s1_batt;
 
 // ---- helpers ----
 // Null-safe label update; objects of inactive screens do not exist.
@@ -108,6 +108,7 @@ static void note_activity(void) {
 
 // ---- forward declarations (later screens referenced earlier) ----
 static void enter_result(void);
+static void enter_result_common(uint8_t score, uint8_t total, uint32_t xp);
 static void grade_answer(void);
 static void enter_sing(void);
 static void enter_setup(void);
@@ -339,6 +340,10 @@ static void grade_answer(void) {
     s_awaiting_answer = false;
     bool correct = ear_model_grade(&s_sess, &s_q, s_cursor);
     if (correct) {
+        s_save.answered++;            // lifetime stats (v1.2)
+        if (s_sess.combo > s_save.best_combo) {
+            s_save.best_combo = s_sess.combo;
+        }
         award_xp(EAR_XP_CORRECT);
         s_sess_xp += EAR_XP_CORRECT;
         ear_audio_play_cue(0);
@@ -385,10 +390,14 @@ static void quiz_audio(ear_audio_event_t *ev) {
 static uint8_t s_sing_target;     // MIDI target note 60..69
 static uint8_t s_sing_fails;      // consecutive failed attempts on this note
 static bool s_showing;            // replaying target after 3 fails
-// Per-level tolerance in cents (PRD 3.2). Device pass 2026-09-29: beginners
-// found +/-50 too tight against detector jitter; L1 sits just under a
-// semitone, L3 stays demanding.
-static const float SING_TOL[3] = {65.0f, 45.0f, 30.0f};
+static uint8_t s_sing_index;      // note 1..5 of this sing session (PRD 3.2)
+static uint8_t s_sing_score;      // passes this sing session
+static bool s_sing_advancing;     // pass cue playing: advance when done
+// Per-level tolerance in cents (PRD 3.2 v1.1). Device passes 2026-09-29 /
+// 2026-10-04: even after the octave-error fix + median-3 smoothing,
+// +/-65/45/30 still stalled beginners at L1; loosened one notch, L3 stays
+// demanding.
+static const float SING_TOL[3] = {80.0f, 55.0f, 35.0f};
 
 // Build the sing screen and arm a fresh target note.
 static void enter_sing(void) {
@@ -426,22 +435,33 @@ static void enter_sing(void) {
     lv_obj_align(sg_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
     lv_label_set_text(sg_hint, "OK START  UP REPLAY  OKL EXIT");
     lv_screen_load(sg_scr);
+    s_sing_index = 1;
+    s_sing_score = 0;
+    s_sing_advancing = false;
+    s_sess_xp = 0;                // sing result reports its own XP (v1.2)
     s_sing_target = 60 + (rand() % 10);
     s_sing_fails = 0;
     ear_audio_play_target(s_sing_target);
     char t[24];
-    snprintf(t, sizeof(t), "SING: %s", ear_note_name(s_sing_target));
+    snprintf(t, sizeof(t), "SING %u/5: %s", (unsigned)s_sing_index,
+             ear_note_name(s_sing_target));
     lbl(sg_note, t, C_GOLD);
     lbl(sg_status, "LISTEN TO TARGET", C_CYAN);
 }
 
-// Pick a new target note (C4-A4), reset fails, play preview.
-static void sing_next_note(void) {
+// Advance the sing session: next of 5 notes, or the shared result page.
+static void sing_advance(void) {
+    if (s_sing_index >= 5) {
+        enter_result_common(s_sing_score, 5, s_sess_xp);
+        return;
+    }
+    s_sing_index++;
     s_sing_target = 60 + (rand() % 10);
     s_sing_fails = 0;
     ear_audio_play_target(s_sing_target);
     char t[24];
-    snprintf(t, sizeof(t), "SING: %s", ear_note_name(s_sing_target));
+    snprintf(t, sizeof(t), "SING %u/5: %s", (unsigned)s_sing_index,
+             ear_note_name(s_sing_target));
     lbl(sg_note, t, C_GOLD);
     lbl(sg_status, "LISTEN TO TARGET", C_CYAN);
     lv_obj_set_x(sg_marker, 94);          // recenter marker on the scale
@@ -468,18 +488,31 @@ static void sing_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 }
 
 static void sing_audio(ear_audio_event_t *ev) {
-    if (ev->kind == EAR_AUDIO_EV_PLAY_DONE && s_showing) {
-        s_showing = false;
-        sing_next_note();
-        return;
+    if (ev->kind == EAR_AUDIO_EV_PLAY_DONE) {
+        if (s_showing) {            // answer demo done: next note / result
+            s_showing = false;
+            sing_advance();
+            return;
+        }
+        if (s_sing_advancing) {     // pass cue done: next note / result
+            s_sing_advancing = false;
+            sing_advance();
+            return;
+        }
     }
     if (ev->kind == EAR_AUDIO_EV_PITCH) {
         if (ev->hz > 0.0f) {
             int x = 94 + (int)(ev->cents * 2.0f);
             lv_obj_set_x(sg_marker, clampi(x, 0, 188));
             char t[40];
-            snprintf(t, sizeof(t), "%+.0f cents", (double)ev->cents);
-            lbl(sg_status, t, C_TEXT);
+            if (ev->oct != 0) {     // right note, other octave (v1.2)
+                snprintf(t, sizeof(t), "%+.0fc %s", (double)ev->cents,
+                         ev->oct < 0 ? "OCT-LOW" : "OCT-HIGH");
+                lbl(sg_status, t, C_CYAN);
+            } else {
+                snprintf(t, sizeof(t), "%+.0f cents", (double)ev->cents);
+                lbl(sg_status, t, C_TEXT);
+            }
         } else {
             lbl(sg_status, "SING!", C_MUTED);
         }
@@ -488,7 +521,10 @@ static void sing_audio(ear_audio_event_t *ev) {
     if (ev->kind == EAR_AUDIO_EV_SING_PASS) {
         award_xp(EAR_XP_SING_PASS);
         s_sess_xp += EAR_XP_SING_PASS;
+        s_sing_score++;
+        s_save.sing_pass++;          // lifetime stats (v1.2)
         ear_audio_play_cue(0);
+        s_sing_advancing = true;    // after the cue, move on
         lbl(sg_status, "PASS +2 XP", C_OK);
     }
 
@@ -498,7 +534,7 @@ static void sing_audio(ear_audio_event_t *ev) {
             // Show answer: replay the target, then move to a new note.
             ear_audio_play_target(s_sing_target);
             lbl(sg_status, "ANSWER SHOWN", C_BAD);
-            s_showing = true;   // after replay, PLAY_DONE picks next note
+            s_showing = true;   // after replay, PLAY_DONE advances
         } else {
             lbl(sg_status, "TRY AGAIN", C_BAD);
         }
@@ -506,8 +542,9 @@ static void sing_audio(ear_audio_event_t *ev) {
 }
 
 // ---- RESULT ----
+// Quiz session end: perfect bonus + auto level adjust, then the shared
+// result page. Sing sessions call enter_result_common directly (v1.2).
 static void enter_result(void) {
-    // Session end: perfect bonus + auto level adjust, persisted.
     if (ear_model_perfect(&s_sess)) {
         award_xp(EAR_XP_PERFECT);
         s_sess_xp += EAR_XP_PERFECT;
@@ -519,8 +556,13 @@ static void enter_result(void) {
     if (changed) {
         if (s_sess.mode == EAR_MODE_INTERVAL) s_save.ilvl = new_lvl;
         else s_save.clvl = new_lvl;
-        ear_store_save(&s_save);
     }
+    ear_store_save(&s_save);   // level and/or lifetime stats (v1.2)
+    enter_result_common(s_sess.score, EAR_QUESTIONS_PER_SESSION, s_sess_xp);
+}
+
+// Shared RESULT screen: score / XP gained / lifetime totals line (v1.2).
+static void enter_result_common(uint8_t score, uint8_t total, uint32_t xp) {
     if (r_scr) { lv_obj_delete(r_scr); r_scr = NULL; }
     s_scr = SCR_RESULT;
     r_scr = lv_obj_create(NULL);
@@ -532,12 +574,19 @@ static void enter_result(void) {
     r_xp = lv_label_create(r_scr);
     lv_obj_set_style_text_font(r_xp, &lv_font_montserrat_14, 0);
     lv_obj_align(r_xp, LV_ALIGN_TOP_MID, 0, 120);
+    r_tot = lv_label_create(r_scr);
+    lv_obj_set_style_text_font(r_tot, &lv_font_montserrat_14, 0);
+    lv_obj_align(r_tot, LV_ALIGN_TOP_MID, 0, 150);
 
     char t[64];
-    snprintf(t, sizeof(t), "SCORE %u/10", (unsigned)s_sess.score);
+    snprintf(t, sizeof(t), "SCORE %u/%u", (unsigned)score, (unsigned)total);
     lbl(r_score, t, C_TEXT);
-    snprintf(t, sizeof(t), "+%lu XP", (unsigned long)s_sess_xp);
+    snprintf(t, sizeof(t), "+%lu XP", (unsigned long)xp);
     lbl(r_xp, t, C_GOLD);
+    snprintf(t, sizeof(t), "TOT %lu ok | %lu sing | combo %u",
+             (unsigned long)s_save.answered, (unsigned long)s_save.sing_pass,
+             (unsigned)s_save.best_combo);
+    lbl(r_tot, t, C_MUTED);
     lv_screen_load(r_scr);
 }
 
@@ -552,12 +601,34 @@ static void setup_refresh(void) {
     snprintf(t, sizeof(t), "VOLUME %u", (unsigned)s_save.vol);
     lbl(s1_vol, t, C_TEXT);
     lbl(s1_reset, "RESET PROGRESS (HOLD OK)", C_MUTED);
+    // Battery gauge diagnostics (v1.1): SOC% beside cell voltage. The CW2017
+    // profile is provisional; % vs V divergence is the signal to recalibrate.
+    int soc = bsp_battery_soc();
+    int mv = bsp_battery_mv();
+    if (soc >= 0 && mv >= 0) {
+        snprintf(t, sizeof(t), "BATT %d%%  %d.%02dV", soc, mv / 1000,
+                 (mv % 1000) / 10);
+    } else if (mv >= 0) {
+        snprintf(t, sizeof(t), "BATT --%%  %d.%02dV", mv / 1000,
+                 (mv % 1000) / 10);
+    } else if (soc >= 0) {
+        snprintf(t, sizeof(t), "BATT %d%%", soc);
+    } else {
+        snprintf(t, sizeof(t), "BATT --");
+    }
+    lbl(s1_batt, t, C_MUTED);
 }
+
+// Reset confirmation state (v1.2): one hold arms, a second hold within 5 s
+// executes; any other key or leaving the screen disarms.
+static bool s_reset_armed;          // first hold done; a second hold confirms
+static uint32_t s_reset_armed_at;   // ms timestamp when armed (5 s window)
 
 // Enter SETUP: volume row, reset hint row, keys hint.
 static void enter_setup(void) {
     if (s1_scr) { lv_obj_delete(s1_scr); s1_scr = NULL; }
     s_scr = SCR_SETUP;
+    s_reset_armed = false;         // stale confirm state never survives entry
     s1_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s1_scr, lv_color_hex(C_BG), 0);
 
@@ -568,6 +639,9 @@ static void enter_setup(void) {
     s1_reset = lv_label_create(s1_scr);
     lv_obj_set_style_text_font(s1_reset, &lv_font_montserrat_14, 0);
     lv_obj_align(s1_reset, LV_ALIGN_TOP_MID, 0, 130);
+    s1_batt = lv_label_create(s1_scr);
+    lv_obj_set_style_text_font(s1_batt, &lv_font_montserrat_14, 0);
+    lv_obj_align(s1_batt, LV_ALIGN_TOP_MID, 0, 170);
     s1_hint = lv_label_create(s1_scr);
     lv_obj_set_style_text_font(s1_hint, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s1_hint, lv_color_hex(C_MUTED), 0);
@@ -580,16 +654,28 @@ static void enter_setup(void) {
 // SETUP keys: UP/DOWN adjust volume (live +/-10), OK saves+returns, OK-long
 // resets progress (volume kept; second-confirm page deferred per PRD).
 static void setup_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (s_reset_armed && now - s_reset_armed_at > 5000u) {
+        s_reset_armed = false;      // confirmation window expired
+    }
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+        if (!s_reset_armed) {
+            s_reset_armed = true;
+            s_reset_armed_at = now;
+            lbl(s1_reset, "HOLD OK AGAIN = RESET", C_BAD);
+            return;
+        }
         uint8_t vol = s_save.vol;
         memset(&s_save, 0, sizeof(s_save));
         s_save.ilvl = s_save.clvl = s_save.slvl = 1;
         s_save.vol = vol;
+        s_reset_armed = false;
         ear_store_save(&s_save);
         enter_home();
         return;
     }
     if (ev != BSP_BTN_CLICK) return;
+    s_reset_armed = false;
     if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
         int v = (int)s_save.vol + (btn == BSP_BTN_UP ? 10 : -10);
         s_save.vol = (uint8_t)clampi(v, 0, 100);
