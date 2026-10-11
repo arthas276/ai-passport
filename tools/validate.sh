@@ -28,6 +28,10 @@ run_static_checks() {
         tests/test_ui_pixel_math.c main/ui_pixel_math.c \
         -o "${test_dir}/test_ui_pixel_math"
     "${test_dir}/test_ui_pixel_math"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_tuner_pitch.c main/tuner_pitch.c -lm         -o "${test_dir}/test_tuner_pitch"
+    "${test_dir}/test_tuner_pitch"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_tuner_modes.c main/tuner_modes.c         -o "${test_dir}/test_tuner_modes"
+    "${test_dir}/test_tuner_modes"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_demo_navigation.c main/demo_navigation.c \
         -o "${test_dir}/test_demo_navigation"
