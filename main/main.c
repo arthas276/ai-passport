@@ -13,8 +13,11 @@
 #include "bsp_pins.h"
 #include "ear_ui.h"
 #include "ear_audio.h"
+#include "key_guard.h"
 #include "lvgl.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -34,6 +37,17 @@ typedef struct {
 
 static QueueHandle_t s_key_q;
 static QueueHandle_t s_audio_q;
+static volatile bool s_input_ready;
+
+// Waking from deep sleep by key reboots the chip while that key is still held:
+// the button component starts a few hundred milliseconds later, sees a level
+// that is already down, and grades it a long press once it passes its
+// threshold (500 ms on this board) - an unintended action fires almost
+// immediately. Drop key actions until that key is released; the deadline is
+// only a safety net so a stuck key cannot leave the pad dead. The state
+// machine lives in key_guard.h so it can be unit-tested without the app.
+#define KEY_GUARD_MAX_US (10LL * 1000 * 1000)
+static key_guard_t s_key_guard;
 
 static void input_task(void *arg) {
     (void)arg;
@@ -71,12 +85,34 @@ static void audio_bridge_task(void *arg) {
 // Button ISR-context callback: enqueue only, never block (BSP rule).
 static void on_key(bsp_btn_t btn, bsp_btn_ev_t ev, void *user) {
     (void)user;
+    // Consume the guard before the readiness check: a release can arrive while
+    // the UI is still booting, and dropping it here would leave the guard armed
+    // to swallow the next real press.
+    const bool was_armed = s_key_guard.armed;
+    if (key_guard_consume(&s_key_guard, ev == BSP_BTN_RELEASE,
+                          esp_timer_get_time())) {
+        if (was_armed && !s_key_guard.armed) {
+            ESP_LOGI(TAG, "wake key released, keys active again");
+        }
+        return;
+    }
+    if (!s_input_ready) return;
     app_event_t e = { .is_key = true, .btn = btn, .ev = ev };
     (void)xQueueSend(s_key_q, &e, 0);
 }
 
 void app_main(void) {
     ESP_LOGI(TAG, "EAR BUDDY boot");
+
+    const uint32_t wake_causes = esp_sleep_get_wakeup_causes();
+    if (wake_causes & ~(1u << ESP_SLEEP_WAKEUP_UNDEFINED)) {
+        ESP_LOGI(TAG, "wake causes: 0x%02x", (unsigned)wake_causes);
+    }
+    // A key wake leaves that key held through the whole boot (see on_key).
+    if (wake_causes & (1u << ESP_SLEEP_WAKEUP_GPIO)) {
+        key_guard_arm(&s_key_guard, esp_timer_get_time(), KEY_GUARD_MAX_US);
+        ESP_LOGI(TAG, "key wake: ignoring key actions until released");
+    }
 
     // NVS first: progress store depends on it. Recover from a dirty sector.
     esp_err_t nvs = nvs_flash_init();
@@ -134,11 +170,19 @@ void app_main(void) {
     if (bsp_button_init(on_key, NULL) != ESP_OK) {
         ESP_LOGE(TAG, "button init failed");
         return;   // three-key device without keys is unusable
+    } else if (s_key_guard.armed) {
+        // If the wake key was released before the button driver started
+        // observing, the driver never emits a release event and the guard would
+        // block until its deadline. Sync once against the sampled level: an
+        // already released key disarms immediately.
+        const bool released = bsp_button_read_mv() >= BSP_BTN_MV_RELEASED_MIN;
+        key_guard_sync_released(&s_key_guard, released);
     }
 
     if (bsp_lvgl_lock(1000)) {
         ear_ui_init(s_key_q);
         bsp_lvgl_unlock();
     }
+    s_input_ready = true;
     ESP_LOGI(TAG, "EAR BUDDY ready");
 }
