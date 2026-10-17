@@ -71,9 +71,12 @@ run_static_checks() {
         -o "${test_dir}/test_bsp_audio_recovery"
     "${test_dir}/test_bsp_audio_recovery"
     for demo in audio low_power ble wifi; do
+        # demo_runtime.c (included by each test) already defines every
+        # LVGL/ui_pixel link stub; adding host_link_stubs.c here only
+        # redefines them, which lld rejects before --gc-sections can run.
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \
-            "tests/test_demo_${demo}_runtime.c" tests/host_link_stubs.c -Wl,--gc-sections \
+            "tests/test_demo_${demo}_runtime.c" -Wl,--gc-sections \
             -o "${test_dir}/test_demo_${demo}_runtime"
         "${test_dir}/test_demo_${demo}_runtime"
     done
