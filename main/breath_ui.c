@@ -208,7 +208,7 @@ static void update_session(const breath_state_t *st) {
     default:                   d = ORB_MIN; break;   // READY / HOLD2 rest
     }
     lv_obj_set_size(s_orb, d, d);
-    lv_obj_center(s_orb);
+    lv_obj_align(s_orb, LV_ALIGN_CENTER, 0, 6);
 
     lv_label_set_text_fmt(s_count, "%u", (st->phase_left_ms + 999u) / 1000u);
     lv_label_set_text_fmt(s_cyc, "C %lu", (unsigned long)st->cycle);
