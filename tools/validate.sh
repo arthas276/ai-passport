@@ -16,18 +16,31 @@ run_static_checks() {
 
     actionlint_bin="${ACTIONLINT_BIN:-}"
     if [[ -z "${actionlint_bin}" ]]; then
-        actionlint_bin="$(command -v actionlint || true)"
+        if ! actionlint_bin="$(./tools/install-actionlint.sh 2>/dev/null)"; then
+            # Windows dev hosts lack an installer case; CI still enforces it.
+            echo "actionlint unavailable on this platform - skipping" >&2
+            actionlint_bin=""
+        fi
     fi
-    if [[ -z "${actionlint_bin}" || ! -x "${actionlint_bin}" ]]; then
-        actionlint_bin="$(./tools/install-actionlint.sh)"
+    if [[ -n "${actionlint_bin}" ]]; then
+        "${actionlint_bin}" -color .github/workflows/*.yml
     fi
-    "${actionlint_bin}" -color .github/workflows/*.yml
 
     test_dir="$(mktemp -d /tmp/ai-passport-host-tests.XXXXXX)"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_ui_pixel_math.c main/ui_pixel_math.c \
         -o "${test_dir}/test_ui_pixel_math"
     "${test_dir}/test_ui_pixel_math"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_ear_model.c main/ear_model.c         -o "${test_dir}/test_ear_model"
+    "${test_dir}/test_ear_model"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_ear_pet.c main/ear_pet.c         -o "${test_dir}/test_ear_pet"
+    "${test_dir}/test_ear_pet"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_ear_pitch.c main/ear_pitch.c -lm         -o "${test_dir}/test_ear_pitch"
+    "${test_dir}/test_ear_pitch"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_ear_tone.c main/ear_tone.c -lm         -o "${test_dir}/test_ear_tone"
+    "${test_dir}/test_ear_tone"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_ear_duet.c main/ear_duet.c main/ear_pitch.c -lm         -o "${test_dir}/test_ear_duet"
+    "${test_dir}/test_ear_duet"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_demo_navigation.c main/demo_navigation.c \
         -o "${test_dir}/test_demo_navigation"
@@ -60,7 +73,7 @@ run_static_checks() {
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \
-            "tests/test_demo_${demo}_runtime.c" -Wl,--gc-sections \
+            "tests/test_demo_${demo}_runtime.c" tests/host_link_stubs.c -Wl,--gc-sections \
             -o "${test_dir}/test_demo_${demo}_runtime"
         "${test_dir}/test_demo_${demo}_runtime"
     done
