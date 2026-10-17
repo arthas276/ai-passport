@@ -29,6 +29,9 @@ typedef enum {
 // Note: no per-day caps: no RTC, no date features (PRD 2).
 #define EAR_XP_SING_PASS    2u   // per PASSed sing attempt
 #define EAR_XP_DUET          3u   // per performed duet round (v1.3)
+#define EAR_XP_DICT_CORRECT  1u   // per fully-correct melody, first try (v1.4)
+#define EAR_XP_DICT_PERFECT  2u   // extra when the melody was exact (v1.4)
+#define EAR_XP_DICT_PARTIAL  1u   // half the melody right, keeps practice going
 
 // ---------------------------------------------------------------------------
 // Quiz model
@@ -106,6 +109,15 @@ bool ear_model_grade(ear_session_t *s, const ear_question_t *q, uint8_t choice);
 uint8_t auto_level_adjust(uint8_t old_level, uint8_t score, bool *changed);
 // Session perfect bonus eligibility.
 bool ear_model_perfect(const ear_session_t *s);
+
+// ---------------------------------------------------------------------------
+// Dictation (melody echo) mode - v1.4 (PRD 3.4)
+// ---------------------------------------------------------------------------
+#define EAR_DICTATION_MAX_NOTES 5u     // notes per melody at level 3
+#define EAR_DICTATION_MIN_NOTES 2u     // fewer confirmed notes -> TOO SHORT
+// Playback tempo per level (ms per note); EAR_DICTATION_GAP_MS between notes.
+extern const uint16_t EAR_DICTATION_NOTE_MS[EAR_LEVEL_MAX];
+#define EAR_DICTATION_GAP_MS 140u
 
 // --- pet API (ear_pet.c, pure) ---
 // Stage from cumulative XP (thresholds in ear_game.h).

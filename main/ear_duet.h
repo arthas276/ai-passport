@@ -16,11 +16,18 @@
 #define EAR_DUET_WOBBLE_CENTS   70.0f // in-note vibrato tolerance
 #define EAR_DUET_MAX_NOTES      12u
 #define EAR_DUET_MIN_NOTES      2u    // fewer -> "TOO SHORT", retry
+#define EAR_DUET_LONG_STOP_FRAMES 25u  // ~1.6 s of silence ends a capture even
+                                       // before the expected note count is
+                                       // reached (dictation: a thinking pause
+                                       // must not eat the whole window)
 
-// One transcribed note: quantized MIDI pitch + how long it was held.
+// One transcribed note: quantized MIDI pitch, how long it was held, and how far
+// the sung pitch drifted from that semitone's ideal frequency. The cents
+// value lets the grader tell "slightly flat C" from "B" (v1.4 tuning).
 typedef struct {
     uint8_t  midi;    // 21..108
     uint16_t ms;      // confirmed duration, multiple of EAR_DUET_FRAME_MS
+    int8_t   cents;   // mean deviation from midi's ideal pitch, -99..+99
 } ear_duet_note_t;
 
 // A transcribed phrase.
@@ -33,6 +40,8 @@ typedef struct {
 typedef struct {
     uint8_t  cur_midi;       // open note (valid while active)
     uint16_t cur_ms;         // held duration of the open note
+    float    cur_cents;      // summed cents deviation of the open note
+    uint16_t cur_frames;     // voiced frames summed into cur_cents
     uint8_t  cand_midi;      // pending note change
     uint8_t  cand_frames;    // consecutive frames backing cand_midi
     uint8_t  gap_frames;     // running unvoiced count
@@ -43,7 +52,13 @@ typedef struct {
 void ear_duet_seg_init(ear_duet_seg_t *s);
 // Feed one frame (hz = 0 -> unvoiced). Closed notes append to *out; extra
 // notes beyond EAR_DUET_MAX_NOTES are dropped. Returns true when the phrase
-// should stop early (>= EAR_DUET_MIN_NOTES notes + trailing silence).
+// should stop early: >= stop_after confirmed notes plus trailing silence, or
+// >= EAR_DUET_MIN_NOTES notes plus EAR_DUET_LONG_STOP_FRAMES of silence
+// (dictation passes the melody length, so a thinking pause cannot cut the
+// tail off the phrase).
+bool ear_duet_seg_feed_ex(ear_duet_seg_t *s, float hz, ear_duet_phrase_t *out,
+                          uint8_t stop_after);
+// Convenience wrapper: stop after EAR_DUET_MIN_NOTES confirmed notes.
 bool ear_duet_seg_feed(ear_duet_seg_t *s, float hz, ear_duet_phrase_t *out);
 // Close the trailing note at capture end (kept when >= CONFIRM frames).
 void ear_duet_seg_finish(ear_duet_seg_t *s, ear_duet_phrase_t *out);

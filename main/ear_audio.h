@@ -47,3 +47,17 @@ void ear_audio_duet_play(const ear_duet_phrase_t *p,
                          const uint8_t harmony[EAR_DUET_MAX_NOTES]);
 // Phrase captured by the last ear_audio_duet_capture() (worker-owned).
 const ear_duet_phrase_t *ear_audio_duet_phrase(void);
+
+// ---- dictation mode (v1.4, PRD 3.4) ----
+// Play a melody sequence at uniform tempo (note_ms per note, 140 ms
+// gap). Posts EAR_AUDIO_EV_DUET_NOTE per note (pct = index + 1, for the
+// pet hop) and EAR_AUDIO_EV_PLAY_DONE at the end.
+void ear_audio_play_melody(const uint8_t *notes, uint8_t count,
+                            uint16_t note_ms);
+// Capture a sung-back melody: same live-segmentation chain as duet, so
+// the transcription lands in the same worker-owned storage (read it with
+// ear_audio_dict_phrase()) and EAR_AUDIO_EV_DUET_PHRASE ends the capture.
+// expect_notes = melody length: the capture then keeps listening through a
+// thinking pause instead of stopping on the first 0.8 s of silence.
+void ear_audio_dict_capture(uint8_t expect_notes);
+const ear_duet_phrase_t *ear_audio_dict_phrase(void);

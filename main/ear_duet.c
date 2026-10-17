@@ -21,13 +21,25 @@ static void seg_close(ear_duet_seg_t *s, ear_duet_phrase_t *out) {
     if (!s->active) return;
     if (s->cur_ms >= EAR_DUET_CONFIRM_FRAMES * EAR_DUET_FRAME_MS &&
         out->count < EAR_DUET_MAX_NOTES) {
+        // Mean drift from the semitone centre; 0 when no frame carried a
+        // usable deviation (callers may then treat the note as in tune).
+        int c = 0;
+        if (s->cur_frames > 0) {
+            float mean = s->cur_cents / (float)s->cur_frames;
+            c = (int)(mean < 0.0f ? mean - 0.5f : mean + 0.5f);
+        }
+        if (c > 99) c = 99;
+        if (c < -99) c = -99;
         out->notes[out->count].midi = s->cur_midi;
         out->notes[out->count].ms = s->cur_ms;
+        out->notes[out->count].cents = (int8_t)c;
         out->count++;
         s->count = out->count;
     }
     s->active = false;
     s->cur_ms = 0;
+    s->cur_cents = 0.0f;
+    s->cur_frames = 0;
 }
 
 // |cents| between a sung hz and the semitone it belongs to. Used to keep
@@ -37,16 +49,23 @@ static float wobble_cents(float hz, uint8_t midi) {
     return ear_pitch_cents(hz, ear_note_freq(midi));
 }
 
-bool ear_duet_seg_feed(ear_duet_seg_t *s, float hz, ear_duet_phrase_t *out) {
+bool ear_duet_seg_feed_ex(ear_duet_seg_t *s, float hz, ear_duet_phrase_t *out,
+                          uint8_t stop_after) {
+    if (stop_after < EAR_DUET_MIN_NOTES) stop_after = EAR_DUET_MIN_NOTES;
     if (hz <= 0.0f) {
         s->cand_frames = 0;
         s->gap_frames++;
         if (s->gap_frames >= EAR_DUET_GAP_FRAMES) {
             seg_close(s, out);   // >= 350 ms rest closes the note
         }
-        // Post-min-notes trailing silence (~0.8 s) ends the capture early.
+        // Expected note count reached: trailing silence (~0.8 s) ends it.
+        if (out->count >= stop_after && s->gap_frames >= EAR_DUET_STOP_FRAMES) {
+            return true;
+        }
+        // Still short of the expected count: only a long pause ends it, so
+        // the singer can think between notes without losing the window.
         return out->count >= EAR_DUET_MIN_NOTES &&
-               s->gap_frames >= EAR_DUET_STOP_FRAMES;
+               s->gap_frames >= EAR_DUET_LONG_STOP_FRAMES;
     }
 
     s->gap_frames = 0;
@@ -57,6 +76,8 @@ bool ear_duet_seg_feed(ear_duet_seg_t *s, float hz, ear_duet_phrase_t *out) {
         s->active = true;
         s->cur_midi = midi;
         s->cur_ms = EAR_DUET_FRAME_MS;
+        s->cur_cents = wobble_cents(hz, midi);
+        s->cur_frames = 1;
         s->cand_frames = 0;
         return false;
     }
@@ -64,6 +85,8 @@ bool ear_duet_seg_feed(ear_duet_seg_t *s, float hz, ear_duet_phrase_t *out) {
     if (midi == s->cur_midi ||
         fabsf(wobble_cents(hz, s->cur_midi)) <= EAR_DUET_WOBBLE_CENTS) {
         s->cur_ms += EAR_DUET_FRAME_MS;          // same note continues
+        s->cur_cents += wobble_cents(hz, s->cur_midi);
+        s->cur_frames++;
         s->cand_frames = 0;
         return false;
     }
@@ -80,10 +103,16 @@ bool ear_duet_seg_feed(ear_duet_seg_t *s, float hz, ear_duet_phrase_t *out) {
             s->active = true;
             s->cur_midi = s->cand_midi;
             s->cur_ms = EAR_DUET_CONFIRM_FRAMES * EAR_DUET_FRAME_MS;
+            s->cur_cents = wobble_cents(hz, s->cur_midi);
+            s->cur_frames = 1;
             s->cand_frames = 0;
         }
     }
     return false;
+}
+
+bool ear_duet_seg_feed(ear_duet_seg_t *s, float hz, ear_duet_phrase_t *out) {
+    return ear_duet_seg_feed_ex(s, hz, out, EAR_DUET_MIN_NOTES);
 }
 
 void ear_duet_seg_finish(ear_duet_seg_t *s, ear_duet_phrase_t *out) {

@@ -124,9 +124,75 @@ static void test_seg_note_cap(void) {
     printf("duet seg: 12-note cap ok\n");
 }
 
+static void test_seg_cents_drift(void) {
+    ear_duet_seg_t s;
+    ear_duet_phrase_t p;
+    ear_duet_seg_init(&s);
+    memset(&p, 0, sizeof(p));
+    // 40 cents flat of C4: still the same semitone, but the drift must be
+    // recorded so the grader can tell "flat C" from "B".
+    float hz = C4 * powf(2.0f, -40.0f / 1200.0f);
+    feed_hz(&s, &p, hz, 20);
+    ear_duet_seg_finish(&s, &p);
+    assert(p.count == 1);
+    assert(p.notes[0].midi == 60);
+    assert(p.notes[0].cents >= -41 && p.notes[0].cents <= -39);
+    printf("duet seg: cents drift recorded ok\n");
+}
+
+static void test_seg_cents_in_tune(void) {
+    ear_duet_seg_t s;
+    ear_duet_phrase_t p;
+    ear_duet_seg_init(&s);
+    memset(&p, 0, sizeof(p));
+    feed_hz(&s, &p, C4, 20);
+    ear_duet_seg_finish(&s, &p);
+    assert(p.count == 1);
+    assert(p.notes[0].cents >= -1 && p.notes[0].cents <= 1);
+    printf("duet seg: in-tune cents ~0 ok\n");
+}
+
+static void test_seg_stop_after_expected(void) {
+    ear_duet_seg_t s;
+    ear_duet_phrase_t p;
+    ear_duet_seg_init(&s);
+    memset(&p, 0, sizeof(p));
+    feed_hz(&s, &p, A3, 10);
+    feed_hz(&s, &p, C4, 10);
+    // Expecting a 3-note melody: ordinary trailing silence must not end the
+    // capture, or the tail of the phrase is lost.
+    for (unsigned i = 0; i < EAR_DUET_STOP_FRAMES; i++) {
+        assert(!ear_duet_seg_feed_ex(&s, 0.0f, &p, 3));
+    }
+    bool stop = false;
+    for (unsigned i = 0; i < 40u && !stop; i++) {
+        stop = ear_duet_seg_feed_ex(&s, 0.0f, &p, 3);
+    }
+    assert(stop);              // ~1.6 s of silence ends it anyway
+    assert(p.count == 2);
+    printf("duet seg: expected-count stop rule ok\n");
+}
+
+static void test_seg_stop_when_expected_reached(void) {
+    ear_duet_seg_t s;
+    ear_duet_phrase_t p;
+    ear_duet_seg_init(&s);
+    memset(&p, 0, sizeof(p));
+    feed_hz(&s, &p, A3, 10);
+    feed_hz(&s, &p, C4, 10);
+    feed_hz(&s, &p, E4, 10);
+    bool stop = false;
+    for (unsigned i = 0; i < EAR_DUET_STOP_FRAMES && !stop; i++) {
+        stop = ear_duet_seg_feed_ex(&s, 0.0f, &p, 3);
+    }
+    assert(stop);              // 3 notes + ~0.8 s silence ends capture
+    assert(p.count == 3);
+    printf("duet seg: stop when expected count reached ok\n");
+}
+
 static void test_key_c_major(void) {
     ear_duet_phrase_t p = { .notes = {
-        {60, 800}, {64, 600}, {67, 600}, {62, 400}, {65, 400}, {69, 400},
+        {60, 800, 0}, {64, 600, 0}, {67, 600, 0}, {62, 400, 0}, {65, 400, 0}, {69, 400, 0},
     }, .count = 6 };
     ear_duet_key_t k;
     ear_duet_infer_key(&p, &k);
@@ -137,7 +203,7 @@ static void test_key_c_major(void) {
 
 static void test_key_a_minor(void) {
     ear_duet_phrase_t p = { .notes = {
-        {69, 700}, {72, 500}, {64, 500}, {67, 400}, {62, 400},
+        {69, 700, 0}, {72, 500, 0}, {64, 500, 0}, {67, 400, 0}, {62, 400, 0},
     }, .count = 5 };
     ear_duet_key_t k;
     ear_duet_infer_key(&p, &k);
@@ -148,7 +214,7 @@ static void test_key_a_minor(void) {
 
 static void test_key_octave_folding(void) {
     ear_duet_phrase_t p = { .notes = {
-        {60, 500}, {64, 400}, {67, 400}, {72, 500}, {76, 400}, {79, 400},
+        {60, 500, 0}, {64, 400, 0}, {67, 400, 0}, {72, 500, 0}, {76, 400, 0}, {79, 400, 0},
     }, .count = 6 };
     ear_duet_key_t k;
     ear_duet_infer_key(&p, &k);
@@ -159,7 +225,7 @@ static void test_key_octave_folding(void) {
 
 static void test_key_fallback_drone(void) {
     ear_duet_phrase_t p = { .notes = {
-        {60, 1500}, {64, 300},
+        {60, 1500, 0}, {64, 300, 0},
     }, .count = 2 };
     ear_duet_key_t k;
     ear_duet_infer_key(&p, &k);
@@ -169,7 +235,7 @@ static void test_key_fallback_drone(void) {
 }
 
 static void test_harmony_unison(void) {
-    ear_duet_phrase_t p = { .notes = {{60, 500}, {64, 500}}, .count = 2 };
+    ear_duet_phrase_t p = { .notes = {{60, 500, 0}, {64, 500, 0}}, .count = 2 };
     ear_duet_key_t k = { .tonic = 0, .minor = false, .fallback = false };
     uint8_t h[EAR_DUET_MAX_NOTES];
     ear_duet_harmony(&p, &k, EAR_STAGE_EGG, h);
@@ -180,7 +246,7 @@ static void test_harmony_unison(void) {
 }
 
 static void test_harmony_third(void) {
-    ear_duet_phrase_t p = { .notes = {{64, 500}, {67, 500}, {60, 500}},
+    ear_duet_phrase_t p = { .notes = {{64, 500, 0}, {67, 500, 0}, {60, 500, 0}},
                            .count = 3 };
     ear_duet_key_t k = { .tonic = 0, .minor = false, .fallback = false };
     uint8_t h[EAR_DUET_MAX_NOTES];
@@ -192,7 +258,7 @@ static void test_harmony_third(void) {
 }
 
 static void test_harmony_low_mirror(void) {
-    ear_duet_phrase_t p = { .notes = {{48, 500}}, .count = 1 };
+    ear_duet_phrase_t p = { .notes = {{48, 500, 0}}, .count = 1 };
     ear_duet_key_t k = { .tonic = 0, .minor = false, .fallback = false };
     uint8_t h[EAR_DUET_MAX_NOTES];
     ear_duet_harmony(&p, &k, EAR_STAGE_CHICK, h);
@@ -201,7 +267,7 @@ static void test_harmony_low_mirror(void) {
 }
 
 static void test_harmony_sixth(void) {
-    ear_duet_phrase_t p = { .notes = {{64, 500}}, .count = 1 };
+    ear_duet_phrase_t p = { .notes = {{64, 500, 0}}, .count = 1 };
     ear_duet_key_t k = { .tonic = 0, .minor = false, .fallback = false };
     uint8_t h[EAR_DUET_MAX_NOTES];
     ear_duet_harmony(&p, &k, EAR_STAGE_FLEDGLING, h);
@@ -210,7 +276,7 @@ static void test_harmony_sixth(void) {
 }
 
 static void test_harmony_octave_clamp(void) {
-    ear_duet_phrase_t p = { .notes = {{84, 500}, {45, 500}}, .count = 2 };
+    ear_duet_phrase_t p = { .notes = {{84, 500, 0}, {45, 500, 0}}, .count = 2 };
     ear_duet_key_t k = { .tonic = 0, .minor = false, .fallback = false };
     uint8_t h[EAR_DUET_MAX_NOTES];
     ear_duet_harmony(&p, &k, EAR_STAGE_EGG, h);
@@ -220,7 +286,7 @@ static void test_harmony_octave_clamp(void) {
 }
 
 static void test_harmony_voice_leading(void) {
-    ear_duet_phrase_t p = { .notes = {{60, 400}, {64, 400}, {67, 400}},
+    ear_duet_phrase_t p = { .notes = {{60, 400, 0}, {64, 400, 0}, {67, 400, 0}},
                            .count = 3 };
     ear_duet_key_t k = { .tonic = 0, .minor = false, .fallback = false };
     uint8_t h[EAR_DUET_MAX_NOTES];
@@ -310,6 +376,10 @@ int main(void) {
     test_seg_excursion_absorbed();
     test_seg_min_duration_drops();
     test_seg_gap_and_early_stop();
+    test_seg_cents_drift();
+    test_seg_cents_in_tune();
+    test_seg_stop_after_expected();
+    test_seg_stop_when_expected_reached();
     test_seg_note_cap();
     test_key_c_major();
     test_key_a_minor();

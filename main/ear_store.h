@@ -8,10 +8,13 @@ typedef struct {
     uint8_t ilvl;     // INTERVAL level 1..3
     uint8_t clvl;     // CHORD level 1..3
     uint8_t slvl;     // SING level 1..3
+    uint8_t dlvl;     // DICTATION level 1..3 (v1.4)
     uint8_t vol;      // volume 0..100
     uint32_t answered;   // lifetime correct quiz answers (v1.2)
     uint32_t sing_pass;  // lifetime sing passes (v1.2)
     uint32_t duets;      // lifetime duets performed (v1.3, key "du")
+    uint32_t melodies;   // lifetime melodies with every note OK (v1.4, key
+                         // "mel"; partial credit earns XP but not this)
     uint8_t best_combo;  // lifetime best combo (v1.2)
 } ear_save_t;
 

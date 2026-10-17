@@ -3,6 +3,7 @@
 #include "ear_ui.h"
 #include "ear_assets.h"
 #include "ear_duet.h"
+#include "ear_dictation.h"
 #include "ear_store.h"
 #include "bsp_display.h"
 #include "bsp_battery.h"
@@ -34,7 +35,7 @@ static bool s_evolve_pending;    // stage changed, celebrate at HOME entry
 
 // ---- current screen ----
 typedef enum {
-    SCR_HOME, SCR_QUIZ, SCR_SING, SCR_DUET, SCR_RESULT, SCR_SETUP,
+    SCR_HOME, SCR_QUIZ, SCR_SING, SCR_DUET, SCR_DICTATION, SCR_RESULT, SCR_SETUP,
 } ear_screen_t;
 static ear_screen_t s_scr;
 
@@ -58,6 +59,7 @@ static uint8_t s_cursor;          // selected quiz option index
 static lv_obj_t *sg_scr, *sg_note, *sg_scale, *sg_marker, *sg_hold;
 static lv_obj_t *sg_status, *sg_hint;
 static lv_obj_t *d_scr, *d_title, *d_pet, *d_notes, *d_key, *d_status, *d_hint;
+static lv_obj_t *dc_scr, *dc_title, *dc_prog, *dc_pet, *dc_notes, *dc_sung, *dc_status, *dc_hint;
 static lv_obj_t *r_scr, *r_score, *r_xp, *r_tot;
 static lv_obj_t *s1_scr, *s1_vol, *s1_reset, *s1_hint, *s1_batt;
 
@@ -116,13 +118,15 @@ static void enter_result_common(uint8_t score, uint8_t total, uint32_t xp);
 static void grade_answer(void);
 static void enter_sing(void);
 static void enter_duet(void);
+static void enter_dictation(void);
 static void enter_setup(void);
 
 // ---- HOME ----
 // Mode card names (index = s_mode_card: 0 INTERVAL 1 CHORD 2 SING 3 DUET
-// 4 SETUP).
-static const char *MODE_NAMES[5] = {
+// 4 DICTATION 5 SETUP).
+static const char *MODE_NAMES[6] = {
     "MODE: INTERVAL", "MODE: CHORD", "MODE: SING", "MODE: DUET",
+    "MODE: DICTATION",
     "MODE: SETUP",
 };
 
@@ -277,7 +281,6 @@ static void enter_quiz(ear_mode_t mode) {
         {{36,96},{126,96},{36,150},{126,150}},
         {{36,84},{126,84},{36,138},{126,138},{36,192},{126,192}},
     };
-    uint8_t n = EAR_LEVEL_OPT_COUNT[s_sess.mode][s_sess.level - 1];
     for (uint8_t i = 0; i < EAR_OPTS_MAX; i++) {
         q_cells[i] = lv_obj_create(q_scr);
         lv_obj_set_size(q_cells[i], 100, 44);
@@ -752,6 +755,287 @@ static void duet_audio_ev(ear_audio_event_t *ev) {
     }
 }
 
+// ---- DICTATION (v1.4, PRD 3.4) ----
+// Five states on one screen: READY -> LISTEN -> ECHO -> SING -> GRADE, ten
+// melodies per session. Playback ticks and the sung-back transcription
+// reuse the duet worker events (EV_DUET_NOTE / EV_DUET_PHRASE): the audio
+// chain is identical, only the grading differs.
+static uint8_t s_dict_state;
+#define DICT_READY  0u
+#define DICT_LISTEN 1u
+#define DICT_ECHO   2u
+#define DICT_SING   3u
+#define DICT_GRADE  4u
+static ear_dictation_session_t s_dict;
+static ear_dictation_melody_t s_dict_mel;
+static uint8_t s_dict_pet_frame;
+
+// "C4 E G" style list for a MIDI array (target or sung-back).
+static void note_list_text(char *out, size_t n, const uint8_t *midis,
+                           uint8_t count) {
+    size_t off = 0;
+    out[0] = 0;
+    for (uint8_t i = 0; i < count && off + 6 < n; i++) {
+        char nb[5];
+        duet_note_label(nb, sizeof(nb), midis[i]);
+        off += (size_t)snprintf(out + off, n - off, i ? " %s" : "%s", nb);
+    }
+}
+
+// "C4 D4 --" style list for a graded phrase: midi 0 prints as "--", so a
+// position nothing was sung for reads as a gap (v1.4 tuning: the player sees
+// exactly which notes were heard).
+static void dict_mark_text(char *out, size_t n, const uint8_t *midis,
+                           uint8_t count) {
+    size_t off = 0;
+    out[0] = 0;
+    for (uint8_t i = 0; i < count && off + 6 < n; i++) {
+        char nb[5];
+        if (midis[i] == 0) {
+            snprintf(nb, sizeof(nb), "--");
+        } else {
+            duet_note_label(nb, sizeof(nb), midis[i]);
+        }
+        off += (size_t)snprintf(out + off, n - off, i ? " %s" : "%s", nb);
+    }
+}
+
+// READY: melody shown, waiting for OK to play it.
+static void dict_refresh_ready(void) {
+    s_dict_state = DICT_READY;
+    char p[48];
+    snprintf(p, sizeof(p), "MELODY %u/%u  LV%u %s",
+             (unsigned)(s_dict.index + 1),
+             (unsigned)EAR_QUESTIONS_PER_SESSION, (unsigned)s_dict.level,
+             EAR_DICT_TOL_NAME[s_dict.level - 1]);
+    lbl(dc_prog, p, C_MUTED);
+    char mbuf[EAR_DICTATION_MAX_NOTES * 6];
+    note_list_text(mbuf, sizeof(mbuf), s_dict_mel.notes, s_dict_mel.count);
+    lbl(dc_notes, mbuf, C_TEXT);
+    lbl(dc_sung, "", C_MUTED);
+    lbl(dc_status, "LISTEN", C_CYAN);
+    lbl(dc_hint, "OK LISTEN  OKL EXIT", C_MUTED);
+    s_dict_pet_frame = 0;
+    lv_image_set_src(dc_pet, &EAR_PET_IMG[ear_pet_stage(s_save.xp)][0]);
+    lv_obj_set_y(dc_pet, 70);
+}
+
+// LISTEN: melody playback; the pet hops on each EV_DUET_NOTE tick.
+static void dict_start_listen(void) {
+    s_dict_state = DICT_LISTEN;
+    lbl(dc_status, "LISTEN...", C_CYAN);
+    lbl(dc_hint, "OKL EXIT", C_MUTED);
+    ear_audio_play_melody(s_dict_mel.notes, s_dict_mel.count,
+                          EAR_DICTATION_NOTE_MS[s_dict.level - 1]);
+}
+
+// ECHO: playback done, melody stays on screen as the target to reproduce.
+static void dict_show_echo(void) {
+    s_dict_state = DICT_ECHO;
+    lbl(dc_sung, "", C_MUTED);
+    lbl(dc_status, "SING IT BACK", C_GOLD);
+    lbl(dc_hint, "OK SING  UP REPLAY  OKL EXIT", C_MUTED);
+}
+
+// SING: capture the sung-back melody (duet chain), grade on phrase end.
+// The capture knows the melody length, so a thinking pause cannot cut the
+// tail off the phrase.
+static void dict_start_sing(void) {
+    s_dict_state = DICT_SING;
+    lbl(dc_status, "SING NOW", C_GOLD);
+    lbl(dc_hint, "OKL EXIT", C_MUTED);
+    ear_audio_dict_capture(s_dict_mel.count);
+}
+
+// Grade the transcription: XP per correct melody (+perfect), lifetime stat,
+// verdict labels. Fewer than EAR_DICTATION_MIN_NOTES notes -> retry. The
+// target line and the heard line stay side by side so the player can see
+// which notes were missed, and half the melody right still earns a point
+// (v1.4 tuning: exact grading alone was too discouraging).
+static void dict_grade(void) {
+    const ear_duet_phrase_t *sung = ear_audio_dict_phrase();
+    if (sung->count < EAR_DICTATION_MIN_NOTES) {
+        lbl(dc_status, "TOO SHORT", C_BAD);
+        lbl(dc_hint, "OK RETRY  OKL EXIT", C_MUTED);
+        lbl(dc_sung, "", C_MUTED);
+        s_dict_state = DICT_ECHO;
+        return;
+    }
+    ear_dictation_result_t res;
+    ear_dictation_grade(&s_dict_mel, sung, s_dict.level, &res);
+    bool correct = ear_dictation_melody_correct(&res);
+    bool perfect = ear_dictation_melody_perfect(&res);
+
+    // TARGET <melody> on the notes line, YOU <heard> on the sung line.
+    char tlist[EAR_DICTATION_MAX_NOTES * 6];
+    char slist[EAR_DICTATION_MAX_NOTES * 6];
+    uint8_t heard[EAR_DICTATION_MAX_NOTES];
+    note_list_text(tlist, sizeof(tlist), s_dict_mel.notes, s_dict_mel.count);
+    for (uint8_t i = 0; i < res.count; i++) heard[i] = res.notes[i].sung;
+    dict_mark_text(slist, sizeof(slist), heard, res.count);
+    char tbuf[EAR_DICTATION_MAX_NOTES * 6 + 12];
+    char sbuf[EAR_DICTATION_MAX_NOTES * 6 + 12];
+    snprintf(tbuf, sizeof(tbuf), "TARGET %s", tlist);
+    snprintf(sbuf, sizeof(sbuf), "YOU    %s", slist);
+    lbl(dc_notes, tbuf, C_TEXT);
+    lbl(dc_sung, sbuf, correct ? C_OK : C_BAD);
+
+    char t[40];
+    if (correct) {
+        s_dict.score++;
+        s_save.melodies++;            // lifetime stat (v1.4)
+        uint32_t gain = EAR_XP_DICT_CORRECT;
+        if (perfect) gain += EAR_XP_DICT_PERFECT;
+        award_xp(gain);               // also persists the lifetime stat
+        s_sess_xp += gain;
+        snprintf(t, sizeof(t), "%s +%lu XP", perfect ? "PERFECT!" : "RIGHT!",
+                 (unsigned long)gain);
+        lbl(dc_status, t, C_OK);
+        ear_audio_play_cue(0);
+    } else if (res.correct_notes * 2u >= s_dict_mel.count) {
+        uint32_t gain = EAR_XP_DICT_PARTIAL;   // half the melody right
+        award_xp(gain);
+        s_sess_xp += gain;
+        snprintf(t, sizeof(t), "CLOSE %u/%u +%lu XP",
+                 (unsigned)res.correct_notes, (unsigned)s_dict_mel.count,
+                 (unsigned long)gain);
+        lbl(dc_status, t, C_GOLD);
+        ear_audio_play_cue(1);
+    } else {
+        snprintf(t, sizeof(t), "WRONG %u/%u", (unsigned)res.correct_notes,
+                 (unsigned)s_dict_mel.count);
+        lbl(dc_status, t, C_BAD);
+        ear_audio_play_cue(1);
+    }
+    lbl(dc_hint, "OK NEXT", C_MUTED);
+    s_dict_state = DICT_GRADE;
+}
+
+// Next melody, or session end after EAR_QUESTIONS_PER_SESSION.
+static void dict_next(void) {
+    s_dict.index++;
+    if (s_dict.index >= EAR_QUESTIONS_PER_SESSION) {
+        bool changed = false;
+        uint8_t new_lvl = auto_level_adjust(s_save.dlvl, s_dict.score,
+                                           &changed);
+        if (changed) s_save.dlvl = new_lvl;
+        ear_store_save(&s_save);
+        enter_result_common(s_dict.score, EAR_QUESTIONS_PER_SESSION, s_sess_xp);
+        return;
+    }
+    ear_dictation_next_melody(&s_dict, &s_dict_mel);
+    dict_refresh_ready();
+}
+
+static void enter_dictation(void) {
+    if (dc_scr) { lv_obj_delete(dc_scr); dc_scr = NULL; }
+    s_scr = SCR_DICTATION;
+    dc_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(dc_scr, lv_color_hex(C_BG), 0);
+
+    dc_title = lv_label_create(dc_scr);
+    lv_label_set_text(dc_title, "DICTATION");
+    lv_obj_set_style_text_font(dc_title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(dc_title, lv_color_hex(C_GOLD), 0);
+    lv_obj_align(dc_title, LV_ALIGN_TOP_MID, 0, 14);
+
+    dc_prog = lv_label_create(dc_scr);
+    lv_obj_set_style_text_font(dc_prog, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(dc_prog, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(dc_prog, LV_ALIGN_TOP_MID, 0, 46);
+
+    dc_pet = lv_image_create(dc_scr);
+    lv_obj_align(dc_pet, LV_ALIGN_TOP_MID, 0, 70);
+
+    dc_notes = lv_label_create(dc_scr);
+    lv_obj_set_style_text_font(dc_notes, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(dc_notes, 220);
+    lv_obj_set_style_text_align(dc_notes, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(dc_notes, LV_ALIGN_TOP_MID, 0, 150);
+
+    // Second line, GRADE only: what was heard, under the target melody.
+    dc_sung = lv_label_create(dc_scr);
+    lv_obj_set_style_text_font(dc_sung, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(dc_sung, 220);
+    lv_obj_set_style_text_align(dc_sung, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(dc_sung, LV_ALIGN_TOP_MID, 0, 174);
+
+    dc_status = lv_label_create(dc_scr);
+    lv_obj_set_style_text_font(dc_status, &lv_font_montserrat_20, 0);
+    lv_obj_align(dc_status, LV_ALIGN_TOP_MID, 0, 210);
+
+    dc_hint = lv_label_create(dc_scr);
+    lv_obj_set_style_text_font(dc_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(dc_hint, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(dc_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_screen_load(dc_scr);
+    ear_dictation_session_init(&s_dict, s_save.dlvl, esp_random());
+    ear_dictation_next_melody(&s_dict, &s_dict_mel);
+    s_sess_xp = 0;                    // dictation result reports its own XP
+    s_dict_pet_frame = 0;
+    dict_refresh_ready();
+}
+
+// Dictation keys: OKL always exits (earned XP stays); state-dependent OK/UP.
+static void dict_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+    if (ev == BSP_BTN_LONG) {
+        if (btn == BSP_BTN_OK) {
+            ear_audio_sing_cancel();  // abort pending playback/capture
+            enter_home();
+        }
+        return;
+    }
+    if (ev != BSP_BTN_CLICK) return;
+    switch (s_dict_state) {
+    case DICT_READY:
+        if (btn == BSP_BTN_OK) dict_start_listen();
+        break;
+    case DICT_ECHO:
+        if (btn == BSP_BTN_OK) dict_start_sing();
+        else if (btn == BSP_BTN_UP) dict_start_listen();
+        break;
+    case DICT_GRADE:
+        if (btn == BSP_BTN_OK) dict_next();
+        break;
+    default:
+        break;   // LISTEN/SING run to their own ends
+    }
+}
+
+static void dict_audio_ev(ear_audio_event_t *ev) {
+    if (ev->kind == EAR_AUDIO_EV_DUET_NOTE && s_dict_state == DICT_LISTEN) {
+        // Pet hop: alternate sprite frames + a small vertical bounce.
+        s_dict_pet_frame ^= 1u;
+        lv_image_set_src(dc_pet,
+            &EAR_PET_IMG[ear_pet_stage(s_save.xp)][s_dict_pet_frame]);
+        lv_obj_set_y(dc_pet, s_dict_pet_frame ? 58 : 70);
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_PLAY_DONE && s_dict_state == DICT_LISTEN) {
+        s_dict_pet_frame = 0;
+        lv_image_set_src(dc_pet, &EAR_PET_IMG[ear_pet_stage(s_save.xp)][0]);
+        lv_obj_set_y(dc_pet, 70);
+        dict_show_echo();
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_PITCH && s_dict_state == DICT_SING) {
+        if (ev->hz > 0.0f) {
+            char nb[5];
+            duet_note_label(nb, sizeof(nb), ear_note_from_hz(ev->hz));
+            char t[32];
+            snprintf(t, sizeof(t), "NOTES %u  %s", (unsigned)ev->pct, nb);
+            lbl(dc_status, t, C_TEXT);
+        } else {
+            lbl(dc_status, "...", C_MUTED);
+        }
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_DUET_PHRASE && s_dict_state == DICT_SING) {
+        dict_grade();
+        return;
+    }
+}
+
 // ---- RESULT ----
 // Quiz session end: perfect bonus + auto level adjust, then the shared
 // result page. Sing sessions call enter_result_common directly (v1.2).
@@ -788,14 +1072,19 @@ static void enter_result_common(uint8_t score, uint8_t total, uint32_t xp) {
     r_tot = lv_label_create(r_scr);
     lv_obj_set_style_text_font(r_tot, &lv_font_montserrat_14, 0);
     lv_obj_align(r_tot, LV_ALIGN_TOP_MID, 0, 150);
+    // The lifetime totals line is longer than the 240 px panel: pin a
+    // wrap width (same as the note lists) so it never runs off-screen.
+    lv_obj_set_width(r_tot, 220);
+    lv_label_set_long_mode(r_tot, LV_LABEL_LONG_WRAP);
 
-    char t[64];
+    char t[80];
     snprintf(t, sizeof(t), "SCORE %u/%u", (unsigned)score, (unsigned)total);
     lbl(r_score, t, C_TEXT);
     snprintf(t, sizeof(t), "+%lu XP", (unsigned long)xp);
     lbl(r_xp, t, C_GOLD);
-    snprintf(t, sizeof(t), "TOT %lu ok | %lu sing | combo %u",
+    snprintf(t, sizeof(t), "TOT ok %lu sing %lu mel %lu combo %u",
              (unsigned long)s_save.answered, (unsigned long)s_save.sing_pass,
+             (unsigned long)s_save.melodies,
              (unsigned)s_save.best_combo);
     lbl(r_tot, t, C_MUTED);
     lv_screen_load(r_scr);
@@ -879,6 +1168,7 @@ static void setup_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         uint8_t vol = s_save.vol;
         memset(&s_save, 0, sizeof(s_save));
         s_save.ilvl = s_save.clvl = s_save.slvl = 1;
+        s_save.dlvl = 1;
         s_save.vol = vol;
         s_reset_armed = false;
         ear_store_save(&s_save);
@@ -905,22 +1195,24 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     case SCR_HOME:
         if (ev != BSP_BTN_CLICK) return;
         if (btn == BSP_BTN_UP) {
-            s_mode_card = (uint8_t)((s_mode_card + 4) % 5);
+            s_mode_card = (uint8_t)((s_mode_card + 5) % 6);
             home_refresh();
         } else if (btn == BSP_BTN_DOWN) {
-            s_mode_card = (uint8_t)((s_mode_card + 1) % 5);
+            s_mode_card = (uint8_t)((s_mode_card + 1) % 6);
             home_refresh();
         } else if (btn == BSP_BTN_OK) {
             if (s_mode_card == 0) enter_quiz(EAR_MODE_INTERVAL);
             else if (s_mode_card == 1) enter_quiz(EAR_MODE_CHORD);
             else if (s_mode_card == 2) enter_sing();
             else if (s_mode_card == 3) enter_duet();
+            else if (s_mode_card == 4) enter_dictation();
             else enter_setup();
         }
         break;
     case SCR_QUIZ: quiz_key(btn, ev); break;
     case SCR_SING: sing_key(btn, ev); break;
     case SCR_DUET: duet_key_ev(btn, ev); break;
+    case SCR_DICTATION: dict_key(btn, ev); break;
     case SCR_RESULT: result_key(btn, ev); break;
     case SCR_SETUP: setup_key(btn, ev); break;
     }
@@ -933,6 +1225,7 @@ void ear_ui_handle_audio(ear_audio_event_t *ev) {
     case SCR_QUIZ: quiz_audio(ev); break;
     case SCR_SING: sing_audio(ev); break;
     case SCR_DUET: duet_audio_ev(ev); break;
+    case SCR_DICTATION: dict_audio_ev(ev); break;
     default: break;   // HOME/RESULT/SETUP ignore worker events
     }
 }

@@ -31,6 +31,11 @@ typedef struct {
     float tol_cents;
     ear_duet_phrase_t phrase;        // CMD_DUET_PLAY payload (v1.3)
     uint8_t harmony[EAR_DUET_MAX_NOTES];
+    uint8_t mnotes[EAR_DICTATION_MAX_NOTES];  // CMD_MELODY payload (v1.4)
+    uint8_t mcount;                           // notes in mnotes
+    uint16_t note_ms;                         // ms per melody note
+    uint8_t expect;                           // CMD_DUET_CAP: stop after this
+                                              // many confirmed notes (v1.4)
 } ear_job_t;
 
 #define CMD_QUIT 0
@@ -41,6 +46,7 @@ typedef struct {
 #define CMD_CANCEL_SING 5
 #define CMD_DUET_CAP 6
 #define CMD_DUET_PLAY 7
+#define CMD_MELODY 8
 #define CUE_MAX_NOTES 8
 
 // Worker state. s_task/s_stopped follow the demo_audio.c ownership pattern:
@@ -186,7 +192,7 @@ static ear_duet_phrase_t s_duet_phrase;
 // Capture one phrase: same 16 kHz chain as run_sing (octave-safe detector +
 // median-3), frames feed the live segmenter. Posts EV_PITCH per frame
 // (pct = confirmed note count for the live counter), EV_DUET_PHRASE at end.
-static void run_duet_capture(void) {
+static void run_duet_capture(uint8_t expect) {
     if (bsp_audio_set_format(EAR_PITCH_SR, 16, 1) != ESP_OK) {
         ear_audio_event_t ev = { .kind = EAR_AUDIO_EV_DUET_PHRASE, .pct = 0 };
         xQueueSend(s_event_q, &ev, 0);
@@ -207,7 +213,7 @@ static void run_duet_capture(void) {
         if (hist >= 2) f0 = ear_pitch_median3(f1, f2, pr.hz);
         f1 = f2; f2 = pr.hz;
         if (hist < 2) hist++;
-        stop = ear_duet_seg_feed(&seg, f0, &s_duet_phrase);
+        stop = ear_duet_seg_feed_ex(&seg, f0, &s_duet_phrase, expect);
         ear_audio_event_t ev = {
             .kind = EAR_AUDIO_EV_PITCH, .hz = f0, .conf = pr.conf,
             .pct = s_duet_phrase.count,
@@ -283,6 +289,30 @@ static void run_duet_play(const ear_job_t *job) {
     post_play_done();
 }
 
+// ---- dictation (v1.4) ----
+// Melody playback at uniform tempo: one DUET_NOTE tick per note keeps
+// the pet hopping in time (same event the duet playback uses).
+static void run_melody(const ear_job_t *job) {
+    if (bsp_audio_set_format(EAR_TONE_SR, 16, 1) != ESP_OK) {
+        post_play_done();
+        return;
+    }
+    bsp_audio_set_volume(s_volume);
+    uint8_t n = job->mcount;
+    if (n > EAR_DICTATION_MAX_NOTES) n = (uint8_t)EAR_DICTATION_MAX_NOTES;
+    int ms = job->note_ms ? job->note_ms : EAR_DICTATION_NOTE_MS[0];
+    ESP_LOGI(TAG, "dictation melody: %u notes @%dms", (unsigned)n, ms);
+    for (uint8_t i = 0; i < n && !s_cancel; i++) {
+        ear_audio_event_t ev = {
+            .kind = EAR_AUDIO_EV_DUET_NOTE, .pct = (uint8_t)(i + 1),
+        };
+        xQueueSend(s_event_q, &ev, 0);
+        play_note(job->mnotes[i], ms, 0.9f);
+        if (i + 1 < n) play_gap(EAR_DICTATION_GAP_MS);
+    }
+    post_play_done();
+}
+
 // Post PLAY_DONE to the app (unless the event queue is full - UI polls the
 // screen state, a dropped event would stall the flow, so this must send).
 static void post_play_done(void) {
@@ -330,10 +360,13 @@ static void audio_task(void *arg) {
             run_sing(job.target_hz, job.tol_cents);
             break;
         case CMD_DUET_CAP:
-            run_duet_capture();
+            run_duet_capture(job.expect);
             break;
         case CMD_DUET_PLAY:
             run_duet_play(&job);
+            break;
+        case CMD_MELODY:
+            run_melody(&job);
             break;
         case CMD_QUIT:
             xSemaphoreGive(s_stopped);
@@ -410,6 +443,27 @@ void ear_audio_duet_play(const ear_duet_phrase_t *p,
 }
 
 const ear_duet_phrase_t *ear_audio_duet_phrase(void) {
+    return &s_duet_phrase;
+}
+
+void ear_audio_play_melody(const uint8_t *notes, uint8_t count,
+                            uint16_t note_ms) {
+    ear_job_t job = { .cmd = CMD_MELODY, .note_ms = note_ms };
+    if (count > EAR_DICTATION_MAX_NOTES) count = (uint8_t)EAR_DICTATION_MAX_NOTES;
+    if (notes && count) memcpy(job.mnotes, notes, count);
+    job.mcount = count;
+    xQueueSend(s_job_q, &job, 0);   // drop when busy: UI re-issues
+}
+
+// The sung-back melody is captured with the duet chain verbatim (same
+// segmentation, same worker-owned phrase buffer, same end event); only the
+// early-stop rule differs, driven by the melody length.
+void ear_audio_dict_capture(uint8_t expect_notes) {
+    ear_job_t job = { .cmd = CMD_DUET_CAP, .expect = expect_notes };
+    xQueueSend(s_job_q, &job, 0);
+}
+
+const ear_duet_phrase_t *ear_audio_dict_phrase(void) {
     return &s_duet_phrase;
 }
 

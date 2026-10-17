@@ -41,6 +41,8 @@ run_static_checks() {
     "${test_dir}/test_ear_tone"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_ear_duet.c main/ear_duet.c main/ear_pitch.c -lm         -o "${test_dir}/test_ear_duet"
     "${test_dir}/test_ear_duet"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_ear_dictation.c main/ear_dictation.c main/ear_duet.c main/ear_pitch.c -lm         -o "${test_dir}/test_ear_dictation"
+    "${test_dir}/test_ear_dictation"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_demo_navigation.c main/demo_navigation.c \
         -o "${test_dir}/test_demo_navigation"

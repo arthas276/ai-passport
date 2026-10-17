@@ -5,7 +5,7 @@
 > 状态：可进入固件实现
 > 硬件：FoloToy AI Passport（ESP32-C3，240x320 ST7789P3，三 ADC 按键，ES8311）
 > 目标分支：feature/ear-buddy（自 main 建立）
-> PRD 版本：v1.3（2026-10-11：二重唱模式——唱一句，宠物来和声，见 3.3）
+> PRD 版本：v1.4（2026-10-17：旋律听写——听一段旋律，唱回来；见 3.4）
 > 日期：2026-09-28
 > 模式：用户预先授权通宵自主开发；AI 自行决定了第 10 节列出的默认值；
 > 真机验证安排在次日晚间用户在场时进行。
@@ -85,17 +85,45 @@
   时长 = 采集时长（截到 200..900ms）+ 80ms 间隔；REVIEW 页先展示转写与调性再播放
 - 确认音符 < 2 个 -> "TOO SHORT" -> OK 重唱
 
-### 3.4 宠物经济
+### 3.4 旋律听写（v1.4）
+
+- 与二重唱思路相反：设备先播放一段短旋律，用户唱回来，逐音判定（宠物经济、
+  NVS 持久化与 3.1 相同）
+- 一局 10 段旋律，用听写级别 dlvl（初始 1，与其他模式级别一样跨局保留）：
+  LV1 三段、LV2 四段、LV3 五段；LV1 范围 C4-G4 且末音落在 C 大三和弦
+  （高级别扩大音域与跳进幅度）；相邻两音不重复
+- 五状态：READY（展示旋律）-> LISTEN（播放，宠物逐音跳）-> ECHO（OK 开始收音，
+  UP 重播）-> SING（收音，与二重唱同一链路，上限 4s：确认到预期音数后
+  静默 0.8s 结束；未到预期音数时只有 1.6s 停顿才结束，唱歌中间可以想
+  一下）-> GRADE（判定 + XP）-> 下一段或 10 段后 RESULT。LV1 播放更慢
+  （每音 560ms，LV2 420ms、LV3 360ms），三段短旋律更容易记住
+- 判定 [PURE ear_dictation.c]：整句八度折叠，由第一个唱出的音决定折叠方向
+  （整体高八度/低八度都算对；句中临时换八度仍判该音错）。折叠后按级别收紧
+  音准容差：±90 音分（LV1 EASY）、±70 音分（LV2 NORMAL）、±50 音分
+  （LV3 STRICT）——LV1 比转写器自身的 ±70 音分抖动窗口更宽，初学者的
+  晃动不会丢音；LV3 要求唱准四分之一音内。容差均不足一个半音，因此再
+  容易的档位下唱错音名也一定判错。
+  目标音按顺序逐个匹配，每个位置最多可跳过 2 个多唱的音（记 EXTRA），
+  因此多唱一个音不会让后面的音整体错位；匹配不到的记 MISS
+- 奖励：全对（无 MISS 无 EXTRA）+2 XP；目标音全部 OK +1 XP；过半目标音 OK
+  +1 XP（唱对一半也有奖励，XP 永不下降）；再低不得分。不足 2 音 -> "TOO SHORT"
+  重收音；局末按与听辨/唱歌相同的 auto 级别调整
+- 按键：OK 推进状态；ECHO 下 UP 重播旋律；OK 长按退局（已得 XP 保留）；
+  RESULT 累计行显示生涯唱对旋律数
+
+### 3.5 宠物经济
 
 - 阶段阈值（累计 XP）：蛋 0 -> 破壳 10 -> 雏鸟 30 -> 幼鸟 80 -> 鸣禽 160
-- XP 来源：听辨答对 +1；满勤（10/10）+3；唱准 +2/次；二重唱 +3/次（v1.3）
+- XP 来源：听辨答对 +1；满勤（10/10）+3；唱准 +2/次；二重唱 +3/次（v1.3）；
+  听写全对 +2、目标音全 OK +1、过半目标音 OK +1（v1.4）
 - 反应：答对宠物跳 + 音效；答错摇头；进化 = 阶段图切换 + 号角 + 跳 x3
 - XP 永不减少；NVS 读取失败按新宠物处理，不崩溃
 
 ## 4. 画面与按键（重新设计，不沿用 demo 外壳）
 
 HOME：标题 + 右上角电量；宠物图 48x48 居中；XP 条 + 文本；底部模式卡
-（INTERVAL/CHORD/SING/DUET/SETUP，UP/DOWN 切换，OK 进入；v1.3 增 DUET）。
+（INTERVAL/CHORD/SING/DUET/DICTATION/SETUP，UP/DOWN 切换，OK 进入；
+v1.3 增 DUET，v1.4 增 DICTATION）。
 QUIZ：头部 "Q 3/10 LV2"；状态行 LISTEN.../判定反馈；选项网格 2/4/6 格；
 底部按键提示。UP 长按重播题目；OK 长按退局（已得 XP 保留）。
 SING：目标音名大字；横向音分标尺 + 移动标记 + 保持进度条；UP 重听；OK 开始
@@ -104,6 +132,12 @@ DUET（v1.3，五状态）：READY 显示阶段和声档（UNISON/3RD/6TH/VOICE-
 OK 开始；LISTEN 实时显示已识别音符数与音名，采集自动结束；REVIEW 展示
 转写（最多 12 音）+ 推断调性（如 "C maj"），OK 播放、UP 重唱；PLAY 旋律
 + 和声回放，宠物逐音跳；DONE 显示 +3 XP 与生涯次数，OK 进下一回合。
+DICTATION（v1.4，五状态）：READY 显示 "DICTATION" + "MELODY 1/10 LV1 EASY" +
+旋律音名，OK 播放；LISTEN 播放中宠物逐音跳（按级别每音 560/420/360ms），播完进
+ECHO；ECHO 旋律留在屏上作目标，"OK SING UP REPLAY OKL EXIT"；SING 实时显示音符数
+与音名，转写自动结束；GRADE 显示 "PERFECT! +2 XP" / "RIGHT! +1 XP" /
+"CLOSE 2/3 +1 XP" / "WRONG 1/3" 与唱回的音名（对绿错红），OK 进下一段，10 段后进
+RESULT。
 RESULT：SCORE n/10 + 本局 XP + 宠物跳动画；OK 回主页（有进化则庆祝）。
 SETUP：UP/DOWN 调音量（±10，立即生效），OK 保存返回；OK 长按 = 重置进度
 （二次确认页推迟到后版）。
@@ -113,7 +147,10 @@ SETUP：UP/DOWN 调音量（±10，立即生效），OK 保存返回；OK 长按
 
 NVS namespace earbuddy：xp u32；ilvl/clvl/slvl u8（1-3）；vol u8（0-100）；
 answered u32；sing_pass u32；best_combo u8（生涯统计，v1.2）；
-duets u32，键 "du"（生涯二重唱次数，v1.3，旧档默认 0）。
+duets u32，键 "du"（生涯二重唱次数，v1.3，旧档默认 0）；
+dlvl u8（听写级别 1-3），键 "dl"；melodies u32，键 "mel"
+（生涯目标音全部 OK 的旋律数——部分给分只加 XP，不计入此项；v1.4 两项，
+旧档默认 1 / 0）。
 读取失败按默认（新宠物）；XP 变化即写（每局 1-2 次，NVS 磨损无忧）；写失败仅日志。
 
 ## 6. 技术架构
@@ -125,13 +162,15 @@ main/
   ear_pet.c         - [PURE] XP->阶段映射/进度辅助
   ear_pitch.c       - [PURE] 整数域自相关 f0 + 插值 + 置信度 + cents
   ear_duet.c        - [PURE] 乐句分段 / 调性推断 / 阶段门控和声（v1.3）
+  ear_dictation.c/h - [PURE] 旋律生成 + 八度折叠、分级容差判定（v1.4）
   ear_tone.c        - [PURE] 加性合成（C4-A4，16000Hz）
   ear_store.c/h     - NVS 持久化（namespace earbuddy）
   ear_audio.c/h     - 单一音频 worker：播放队列 + mic->pitch->事件
-  ear_ui.c          - 五页 UI + 背光空闲管理（次日晚间验证）
+  ear_ui.c          - 六页 UI + 背光空闲管理
   ear_assets.c/h    - 宠物 5 阶段 x2 帧 48x48 RGB565（脚本生成）
 tools/gen_pet_assets.py - 像素画生成器
 tests/test_ear_model.c / test_ear_pet.c / test_ear_pitch.c / test_ear_tone.c
+      / test_ear_duet.c / test_ear_dictation.c
 
 [PURE] 模块零 IDF/LVGL 依赖，gcc -std=c11 -Wall -Wextra -Werror 编译通过并
 已注册进 tools/validate.sh（funbox 先例：feature 分支可改 validate.sh）。
