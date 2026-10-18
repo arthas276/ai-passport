@@ -5,7 +5,9 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.4 (2026-10-17: DICTATION mode — hear a melody, sing it back; see 3.4)
+> PRD version: v1.5 (2026-10-18: reset moved to a full-screen confirm page -
+> first hold enters, a second hold within 5 s executes, any key cancels);
+> v1.4 (2026-10-17: DICTATION mode — hear a melody, sing it back; see 3.4)
 > Date: 2026-09-28
 > Mode: user pre-authorized autonomous overnight build; AI made the listed
 > default decisions; on-device verification planned next evening with user.
@@ -206,7 +208,8 @@ RESULT (after 10 quiz questions)
 
 SETUP
 - rows: VOLUME (UP/DOWN +/-10, OK save+back); RESET PROGRESS (OK long ->
-  reset, back to HOME; second-confirm page deferred)
+  full-screen confirm page: a second hold within 5 s resets and returns
+  HOME, any key cancels; page added v1.5)
 - battery top-right
 
 Global: 10 s idle -> backlight 30%; any key -> 100%. Implemented in ear_ui.
@@ -217,7 +220,7 @@ Global: 10 s idle -> backlight 30%; any key -> 100%. Implemented in ear_ui.
 |---|---|---|---|---|---|---|---|
 | UP/DOWN click | switch card | move cursor | UP=replay | UP=re-sing | UP=replay melody | - | select/adjust |
 | OK click | enter mode | confirm answer | start attempt | start/confirm/play-next | listen/sing/next | to HOME | save+back |
-| OK long | - | quit session | quit | quit | quit session | - | RESET row: reset |
+| OK long | - | quit session | quit | quit | quit session | - | RESET row: open confirm page |
 | UP long | - | replay audio | - | - | - | - | - |
 
 OK-long quit never revokes earned XP (XP booked + NVS-written at the moment
@@ -290,7 +293,7 @@ gcc -std=c11 -Wall -Wextra -Werror. Registered in tools/validate.sh
 | 3 fails -> show answer | yes | avoid stuck states |
 | OK-long quit keeps XP | yes | no-punishment principle |
 | Idle backlight 30% after 10 s | yes | repo power convention |
-| RESET = two OK holds within 5 s | v1.2 | one accidental 500 ms hold wiped a pet on device 2026-10-11 |
+| RESET = two OK holds within 5 s, second on a full-screen confirm page | v1.2/v1.5 | one accidental 500 ms hold wiped a pet on device 2026-10-11 |
 
 ## 11. Delivery Report Format
 

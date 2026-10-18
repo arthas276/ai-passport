@@ -36,6 +36,7 @@ static bool s_evolve_pending;    // stage changed, celebrate at HOME entry
 // ---- current screen ----
 typedef enum {
     SCR_HOME, SCR_QUIZ, SCR_SING, SCR_DUET, SCR_DICTATION, SCR_RESULT, SCR_SETUP,
+    SCR_RESET,
 } ear_screen_t;
 static ear_screen_t s_scr;
 
@@ -62,6 +63,7 @@ static lv_obj_t *d_scr, *d_title, *d_pet, *d_notes, *d_key, *d_status, *d_hint;
 static lv_obj_t *dc_scr, *dc_title, *dc_prog, *dc_pet, *dc_notes, *dc_sung, *dc_status, *dc_hint;
 static lv_obj_t *r_scr, *r_score, *r_xp, *r_tot;
 static lv_obj_t *s1_scr, *s1_vol, *s1_reset, *s1_hint, *s1_batt;
+static lv_obj_t *rs_scr, *rs_title, *rs_warn, *rs_hint;   // RESET confirm page
 
 // ---- helpers ----
 // Null-safe label update; objects of inactive screens do not exist.
@@ -1119,16 +1121,10 @@ static void setup_refresh(void) {
     lbl(s1_batt, t, C_MUTED);
 }
 
-// Reset confirmation state (v1.2): one hold arms, a second hold within 5 s
-// executes; any other key or leaving the screen disarms.
-static bool s_reset_armed;          // first hold done; a second hold confirms
-static uint32_t s_reset_armed_at;   // ms timestamp when armed (5 s window)
-
 // Enter SETUP: volume row, reset hint row, keys hint.
 static void enter_setup(void) {
     if (s1_scr) { lv_obj_delete(s1_scr); s1_scr = NULL; }
     s_scr = SCR_SETUP;
-    s_reset_armed = false;         // stale confirm state never survives entry
     s1_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s1_scr, lv_color_hex(C_BG), 0);
 
@@ -1151,18 +1147,47 @@ static void enter_setup(void) {
     setup_refresh();
 }
 
-// SETUP keys: UP/DOWN adjust volume (live +/-10), OK saves+returns, OK-long
-// resets progress (volume kept; second-confirm page deferred per PRD).
-static void setup_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+// ---- RESET confirm page ----
+// Full-screen second-confirm page (v1.5; PRD v1.2 deferred it): the first
+// OK hold on SETUP opens this prompt, a second hold within 5 s wipes
+// progress, and any click - or a lapsed 5 s window - returns to SETUP.
+// Volume survives the wipe; the 2026-10-11 accidental single-hold wipe is
+// why both holds exist.
+static uint32_t s_reset_armed_at;   // ms timestamp when the page opened
+
+static void enter_reset_confirm(void) {
+    if (rs_scr) { lv_obj_delete(rs_scr); rs_scr = NULL; }
+    s_scr = SCR_RESET;
+    s_reset_armed_at = (uint32_t)(esp_timer_get_time() / 1000);
+    rs_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(rs_scr, lv_color_hex(C_BG), 0);
+
+    rs_title = lv_label_create(rs_scr);
+    lv_obj_set_style_text_font(rs_title, &lv_font_montserrat_20, 0);
+    lv_obj_align(rs_title, LV_ALIGN_TOP_MID, 0, 90);
+    lbl(rs_title, "RESET ALL PROGRESS?", C_BAD);
+
+    rs_warn = lv_label_create(rs_scr);
+    lv_obj_set_style_text_font(rs_warn, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_align(rs_warn, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(rs_warn, LV_ALIGN_TOP_MID, 0, 140);
+    lbl(rs_warn, "XP, GROWTH AND STATS\nWILL BE ERASED", C_MUTED);
+
+    rs_hint = lv_label_create(rs_scr);
+    lv_obj_set_style_text_font(rs_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(rs_hint, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(rs_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_label_set_text(rs_hint, "HOLD OK = RESET  ANY KEY = CANCEL");
+    lv_screen_load(rs_scr);
+}
+
+// RESET CONFIRM keys: a second OK hold within 5 s executes the wipe; any
+// other press cancels back to SETUP.
+static void reset_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    if (s_reset_armed && now - s_reset_armed_at > 5000u) {
-        s_reset_armed = false;      // confirmation window expired
-    }
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-        if (!s_reset_armed) {
-            s_reset_armed = true;
-            s_reset_armed_at = now;
-            lbl(s1_reset, "HOLD OK AGAIN = RESET", C_BAD);
+        if (now - s_reset_armed_at > 5000u) {   // 5 s window lapsed: cancel
+            enter_setup();
             return;
         }
         uint8_t vol = s_save.vol;
@@ -1170,13 +1195,22 @@ static void setup_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         s_save.ilvl = s_save.clvl = s_save.slvl = 1;
         s_save.dlvl = 1;
         s_save.vol = vol;
-        s_reset_armed = false;
         ear_store_save(&s_save);
         enter_home();
         return;
     }
+    if (ev == BSP_BTN_CLICK) enter_setup();   // any key cancels
+}
+
+// SETUP keys: UP/DOWN adjust volume (live +/-10), OK saves+returns, OK-long
+// opens the reset confirmation page (the dedicated page PRD v1.2 deferred;
+// the double-hold semantics continue on it).
+static void setup_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+    if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
+        enter_reset_confirm();
+        return;
+    }
     if (ev != BSP_BTN_CLICK) return;
-    s_reset_armed = false;
     if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
         int v = (int)s_save.vol + (btn == BSP_BTN_UP ? 10 : -10);
         s_save.vol = (uint8_t)clampi(v, 0, 100);
@@ -1215,6 +1249,7 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     case SCR_DICTATION: dict_key(btn, ev); break;
     case SCR_RESULT: result_key(btn, ev); break;
     case SCR_SETUP: setup_key(btn, ev); break;
+    case SCR_RESET: reset_key(btn, ev); break;
     }
 }
 
@@ -1226,7 +1261,7 @@ void ear_ui_handle_audio(ear_audio_event_t *ev) {
     case SCR_SING: sing_audio(ev); break;
     case SCR_DUET: duet_audio_ev(ev); break;
     case SCR_DICTATION: dict_audio_ev(ev); break;
-    default: break;   // HOME/RESULT/SETUP ignore worker events
+    default: break;   // HOME/RESULT/SETUP/RESET ignore worker events
     }
 }
 
