@@ -5,7 +5,9 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.5 (2026-10-18: reset moved to a full-screen confirm page -
+> PRD version: v1.6 (2026-10-18: interval quiz gains descending and harmonic
+> directions - DOWN mixes in at L2, HARMONIC at L3; grading and level rules
+> unchanged); v1.5 (2026-10-18: reset moved to a full-screen confirm page -
 > first hold enters, a second hold within 5 s executes, any key cancels);
 > v1.4 (2026-10-17: DICTATION mode — hear a melody, sing it back; see 3.4)
 > Date: 2026-09-28
@@ -40,7 +42,9 @@
 
 ### 3.1 Quiz (Interval / Chord)
 
-- Session = 10 questions; roots C4-A4; ascending only (desc/harmonic deferred)
+- Session = 10 questions; roots C4-A4; direction by level (v1.6): L1
+  ascending only, L2 mixes ascending/descending, L3 mixes asc/desc/harmonic;
+  the answer is the interval itself, direction-independent
 - Option sets by level:
   - INTERVAL: L1 {m3, M3}; L2 {m3, M3, P4, P5}; L3 {m2, M2, m3, M3, P4, P5}
   - CHORD: L1 {maj, min}; L2 {maj, min, dim, aug}; L3 {maj, min, dim, aug, M7, 7}
@@ -53,7 +57,9 @@
 - Tone: additive synthesis (f + 0.40*2f + 0.18*3f, v1.3 re-tint), fast
   attack, gentle decay to ~64% + 8 ms release, 16000 Hz 16-bit mono
   (board-validated rate; 22050 distorts); interval = two notes 650 ms +
-  120 ms gap; chord = three notes together 1250 ms; sing target preview
+  120 ms gap (descending = higher note first, same timings; harmonic = both
+  notes together 1250 ms via the chord mixer); chord = three notes
+  together 1250 ms; sing target preview
   950 ms (v1.3: longer, fuller per user request); roots C4-A4 (261.6-440
   Hz, tiny-speaker friendly)
 
@@ -294,6 +300,7 @@ gcc -std=c11 -Wall -Wextra -Werror. Registered in tools/validate.sh
 | OK-long quit keeps XP | yes | no-punishment principle |
 | Idle backlight 30% after 10 s | yes | repo power convention |
 | RESET = two OK holds within 5 s, second on a full-screen confirm page | v1.2/v1.5 | one accidental 500 ms hold wiped a pet on device 2026-10-11 |
+| Down/harmonic unlock levels | L1 up; L2 +down; L3 +harmonic | teaching order: build the ascending reference first, then direction sensitivity |
 
 ## 11. Delivery Report Format
 

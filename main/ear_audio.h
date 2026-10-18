@@ -30,7 +30,10 @@ typedef struct {
 esp_err_t ear_audio_init(QueueHandle_t event_q);
 
 // ---- playback requests (queued, non-blocking) ----
-void ear_audio_play_question(uint8_t root_midi, ear_kind_t kind);
+// dir selects the interval presentation (v1.6): UP/DOWN = two notes in
+// turn, HARM = both together. Chords ignore it.
+void ear_audio_play_question(uint8_t root_midi, ear_kind_t kind,
+                             ear_dir_t dir);
 void ear_audio_play_target(uint8_t midi);
 void ear_audio_play_cue(int cue_id);   // 0=correct 1=wrong 2=evolve
 // ---- sing mode ----

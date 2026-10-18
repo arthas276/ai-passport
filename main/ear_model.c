@@ -63,6 +63,15 @@ static void shuffle_options(uint8_t *opt, uint8_t n) {
     }
 }
 
+// Draw the interval playback direction (PRD 3.1, v1.6): L1 ascending
+// only, L2 mixes ascending/descending, L3 adds harmonic. Chords ignore
+// direction (the caller keeps EAR_DIR_UP).
+static ear_dir_t draw_dir(uint8_t level) {
+    uint8_t span = (level >= EAR_LEVEL_MAX) ? EAR_DIR_COUNT
+                 : (level >= 2) ? 2 : 1;
+    return (ear_dir_t)(rand() % span);
+}
+
 // Generate the next question into *q.
 // Root: uniform 60..69. Answer: uniform from level options, retrying up to
 // 20 draws to avoid repeating the previous answer kind (always terminates;
@@ -76,6 +85,8 @@ void ear_model_next_question(ear_session_t *s, ear_question_t *q) {
     }
     s->prev_kind = drawn;
     q->root = 60 + (rand() % 10);   // MIDI C4..A4
+    q->dir = (s->mode == EAR_MODE_INTERVAL) ? draw_dir(s->level)
+                                            : EAR_DIR_UP;   // chords: n/a
     q->answer = (ear_kind_t)drawn;
     for (uint8_t i = 0; i < n; i++) {
         q->options[i] = EAR_LEVELS[s->mode][s->level - 1][i];

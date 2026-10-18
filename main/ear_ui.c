@@ -256,7 +256,7 @@ static void quiz_load_question(void) {
              (unsigned)EAR_QUESTIONS_PER_SESSION, (unsigned)s_sess.level);
     lbl(q_hdr, hdr, C_MUTED);
     lbl(q_status, "LISTEN...", C_CYAN);
-    ear_audio_play_question(s_q.root, s_q.answer);
+    ear_audio_play_question(s_q.root, s_q.answer, s_q.dir);
 }
 
 // Enter the quiz screen for a mode (INTERVAL or CHORD).
@@ -329,7 +329,7 @@ static void quiz_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             return;
         }
         if (btn == BSP_BTN_UP && s_awaiting_answer) {
-            ear_audio_play_question(s_q.root, s_q.answer);   // replay
+            ear_audio_play_question(s_q.root, s_q.answer, s_q.dir);   // replay
         }
         return;
     }
@@ -366,7 +366,7 @@ static void grade_answer(void) {
                                     lv_color_hex(C_OK), 0);
     } else {
         ear_audio_play_cue(1);
-        ear_audio_play_question(s_q.root, s_q.answer);   // teach: replay
+        ear_audio_play_question(s_q.root, s_q.answer, s_q.dir);   // teach: replay
         char t[40];
         snprintf(t, sizeof(t), "ANSWER: %s", EAR_KINDS[s_q.answer].label);
         lbl(q_status, t, C_BAD);

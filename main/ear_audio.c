@@ -27,6 +27,7 @@ typedef struct {
     int cmd;                         // CMD_* below
     uint8_t root;
     uint8_t kind;
+    uint8_t dir;                     // interval direction (v1.6)
     float target_hz;
     float tol_cents;
     ear_duet_phrase_t phrase;        // CMD_DUET_PLAY payload (v1.3)
@@ -96,32 +97,51 @@ static void play_gap(int ms) {
     }
 }
 
+// Render count notes simultaneously for ms milliseconds (chords, and
+// harmonic intervals since v1.6). amp is per-voice; the mixer saturates.
+static void play_together(const uint8_t *notes, int count, int ms, float amp) {
+    ear_tone_voice_t vo[EAR_TONE_MAX_VOICES];
+    int16_t tmp[CHUNK];
+    static int16_t out[CHUNK];
+    int total = EAR_TONE_SR * ms / 1000u;
+    for (int i = 0; i < count; i++) {
+        ear_tone_start(&vo[i], ear_note_freq(notes[i]), amp, total);
+    }
+    int left = total;
+    while (left > 0 && !s_cancel) {
+        int n = left < CHUNK ? left : CHUNK;
+        memset(out, 0, n * 2);          // static buf: re-zero per chunk
+        for (int i = 0; i < count; i++) {
+            ear_tone_render(&vo[i], tmp, n);
+            ear_tone_mix(out, tmp, n);
+        }
+        bsp_audio_write(out, n * 2);
+        left -= n;
+    }
+}
+
 // Render the audio for one quiz question (interval or chord).
-static void play_question(uint8_t root, uint8_t kind_idx) {
+// Interval direction (v1.6): UP = root first, DOWN = higher note first,
+// HARM = both notes together via the chord mixer (slightly hotter per-
+// voice amp than a 3-note chord so the pair stays audible on the speaker).
+static void play_question(uint8_t root, uint8_t kind_idx, uint8_t dir) {
     const ear_kind_info_t *k = &EAR_KINDS[kind_idx];
-    if (k->len == 0) {                        // interval: two notes in turn
-        play_note(root, NOTE_MS, 0.9f);
+    if (k->len == 0) {                        // interval
+        uint8_t lo = root, hi = root + k->semis;
+        if (dir == EAR_DIR_HARM) {
+            uint8_t pair[2] = { lo, hi };
+            play_together(pair, 2, CHORD_MS, 0.7f);
+            return;
+        }
+        uint8_t first = (dir == EAR_DIR_DOWN) ? hi : lo;
+        uint8_t second = (dir == EAR_DIR_DOWN) ? lo : hi;
+        play_note(first, NOTE_MS, 0.9f);
         play_gap(GAP_MS);
-        play_note(root + k->semis, NOTE_MS, 0.9f);
+        play_note(second, NOTE_MS, 0.9f);
     } else {                                  // chord: notes together
-        ear_tone_voice_t vo[EAR_TONE_MAX_VOICES];
-        int16_t tmp[CHUNK];
-        static int16_t out[CHUNK];
-        int total = EAR_TONE_SR * CHORD_MS / 1000u;
-        for (int i = 0; i < k->len; i++) {
-            ear_tone_start(&vo[i], ear_note_freq(root + k->chord[i]), 0.55f, total);
-        }
-        int left = total;
-        while (left > 0 && !s_cancel) {
-            int n = left < CHUNK ? left : CHUNK;
-            memset(out, 0, n * 2);          // static buf: re-zero per chunk
-            for (int i = 0; i < k->len; i++) {
-                ear_tone_render(&vo[i], tmp, n);
-                ear_tone_mix(out, tmp, n);
-            }
-            bsp_audio_write(out, n * 2);
-            left -= n;
-        }
+        uint8_t notes[4];
+        for (int i = 0; i < k->len; i++) notes[i] = root + k->chord[i];
+        play_together(notes, k->len, CHORD_MS, 0.55f);
     }
 }
 
@@ -330,7 +350,7 @@ static void audio_task(void *arg) {
         case CMD_QUESTION:
             if (bsp_audio_set_format(EAR_TONE_SR, 16, 1) == ESP_OK) {
                 bsp_audio_set_volume(s_volume);
-                play_question(job.root, job.kind);
+                play_question(job.root, job.kind, job.dir);
             }
             post_play_done();
             break;
@@ -406,9 +426,11 @@ esp_err_t ear_audio_init(QueueHandle_t event_q) {
     return ESP_OK;
 }
 
-void ear_audio_play_question(uint8_t root_midi, ear_kind_t kind) {
+void ear_audio_play_question(uint8_t root_midi, ear_kind_t kind,
+                             ear_dir_t dir) {
     ear_job_t job = {
         .cmd = CMD_QUESTION, .root = root_midi, .kind = (uint8_t)kind,
+        .dir = (uint8_t)dir,
     };
     xQueueSend(s_job_q, &job, 0);   // drop when busy: UI re-issues
 }

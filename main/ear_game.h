@@ -75,10 +75,22 @@ extern const ear_kind_info_t EAR_KINDS[EAR_KIND_COUNT];
 extern const uint8_t EAR_LEVELS[EAR_MODE_COUNT][3][EAR_OPTS_MAX];
 extern const uint8_t EAR_LEVEL_OPT_COUNT[EAR_MODE_COUNT][3];
 
+// Interval playback direction (PRD 3.1, v1.6). Chord questions ignore it.
+// L1 draws UP only; L2 mixes UP/DOWN; L3 adds HARMONIC (both notes at
+// once). The answer is the interval itself either way - direction is not
+// graded, it only changes how the question sounds.
+typedef enum {
+    EAR_DIR_UP = 0,   // root first, then root+semis (the pre-v1.6 behavior)
+    EAR_DIR_DOWN,     // higher note first, then root
+    EAR_DIR_HARM,     // both notes simultaneously (chord mixer path)
+    EAR_DIR_COUNT
+} ear_dir_t;
+
 // One quiz question.
 typedef struct {
     uint8_t root;             // MIDI root note 60..69 (C4..A4)
     ear_kind_t answer;        // correct kind (index into EAR_KINDS)
+    ear_dir_t dir;            // interval playback direction (v1.6)
     uint8_t options[EAR_OPTS_MAX];  // presented kinds (may repeat values
                               // across questions, never within one question)
 } ear_question_t;

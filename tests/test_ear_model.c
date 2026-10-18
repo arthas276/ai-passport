@@ -33,6 +33,30 @@ int main(void)
 
         if ((i + 1) % 100 == 0) s.level = 2;   // exercise L2 tables too
     }
+
+    // Direction gating (PRD 3.1, v1.6): L1 UP only, L2 adds DOWN, L3 adds
+    // HARM; every allowed direction occurs across 300 draws (fixed seed).
+    for (int lvl = 1; lvl <= 3; lvl++) {
+        ear_model_session_init(&s, EAR_MODE_INTERVAL, (uint8_t)lvl);
+        bool seen[EAR_DIR_COUNT] = { false };
+        for (int i = 0; i < 300; i++) {
+            ear_model_next_question(&s, &q);
+            assert(q.dir < EAR_DIR_COUNT);
+            if (lvl == 1) assert(q.dir == EAR_DIR_UP);
+            if (lvl == 2) assert(q.dir == EAR_DIR_UP || q.dir == EAR_DIR_DOWN);
+            seen[q.dir] = true;
+        }
+        assert(seen[EAR_DIR_UP]);
+        if (lvl >= 2) assert(seen[EAR_DIR_DOWN]);
+        if (lvl >= 3) assert(seen[EAR_DIR_HARM]);
+    }
+    // Chord questions ignore direction (always UP).
+    ear_model_session_init(&s, EAR_MODE_CHORD, 3);
+    for (int i = 0; i < 50; i++) {
+        ear_model_next_question(&s, &q);
+        assert(q.dir == EAR_DIR_UP);
+    }
+
         // Grading: correct choice advances score/combo; wrong resets combo only.
     ear_model_session_init(&s, EAR_MODE_CHORD, 2);
     ear_model_next_question(&s, &q);
