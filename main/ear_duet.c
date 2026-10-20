@@ -303,7 +303,7 @@ void ear_duet_harmony(const ear_duet_phrase_t *p, const ear_duet_key_t *k,
     for (uint8_t i = 0; i < p->count; i++) {
         uint8_t m = p->notes[i].midi;
         uint8_t third = harmony_for(m, k, 1);
-        if (stage != EAR_STAGE_SONGBIRD) {
+        if (stage < EAR_STAGE_SONGBIRD) {   // lead tier: Songbird + virtuoso ranks (v1.7)
             out[i] = sixth ? harmony_for(m, k, 4) : third;
         } else {
             // Smooth voice leading: pick third or sixth closest to the

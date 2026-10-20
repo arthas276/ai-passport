@@ -111,10 +111,69 @@ def draw_songbird(c, blink):
     px(c, 44, 10, 7)                        # music note dot
     rect(c, 43, 11, 43, 15, 7)              # note stem
 
+def draw_virtuoso(c, blink):
+    # Songbird anatomy, palette-shifted: white body keeps the gray wing/tail.
+    # The v1.7 endgame ranks reuse the existing visual language - same bird,
+    # same single note - and differentiate only through body/wing/tail
+    # colors: white/gray -> white/gold -> gold/gold.
+    fill_ellipse(c, 25, 27, 13, 12, 1)      # white body
+    fill_ellipse(c, 25, 14, 8, 7, 1)        # white head
+    fill_ellipse(c, 22, 13, 1, 1, 4)
+    fill_ellipse(c, 28, 13, 1, 1, 4)
+    if blink:
+        rect(c, 21, 13, 23, 13, 4)
+        rect(c, 27, 13, 29, 13, 4)
+    rect(c, 24, 16, 26, 17, 2)              # beak
+    fill_ellipse(c, 14, 29, 5, 8, 6)        # wing
+    rect(c, 36, 24, 41, 27, 6)              # tail
+    fill_ellipse(c, 30, 22, 2, 2, 5)        # cheek
+    rect(c, 20, 39, 22, 42, 2)
+    rect(c, 28, 39, 30, 42, 2)
+    px(c, 44, 10, 7)                        # music note dot
+    rect(c, 43, 11, 43, 15, 7)              # note stem
+
+def draw_master(c, blink):
+    # White body with gold wing and tail.
+    fill_ellipse(c, 25, 27, 13, 12, 1)      # white body
+    fill_ellipse(c, 25, 14, 8, 7, 1)        # white head
+    fill_ellipse(c, 22, 13, 1, 1, 4)
+    fill_ellipse(c, 28, 13, 1, 1, 4)
+    if blink:
+        rect(c, 21, 13, 23, 13, 4)
+        rect(c, 27, 13, 29, 13, 4)
+    rect(c, 24, 16, 26, 17, 2)              # beak
+    fill_ellipse(c, 14, 29, 5, 8, 3)        # gold wing
+    rect(c, 36, 24, 41, 27, 3)              # gold tail
+    fill_ellipse(c, 30, 22, 2, 2, 5)        # cheek
+    rect(c, 20, 39, 22, 42, 2)
+    rect(c, 28, 39, 30, 42, 2)
+    px(c, 44, 10, 7)                        # music note dot
+    rect(c, 43, 11, 43, 15, 7)              # note stem
+
+def draw_legend(c, blink):
+    # Fully golden songbird: the final rank.
+    fill_ellipse(c, 25, 27, 13, 12, 3)      # gold body
+    fill_ellipse(c, 25, 14, 8, 7, 3)        # gold head
+    fill_ellipse(c, 22, 13, 1, 1, 4)
+    fill_ellipse(c, 28, 13, 1, 1, 4)
+    if blink:
+        rect(c, 21, 13, 23, 13, 4)
+        rect(c, 27, 13, 29, 13, 4)
+    rect(c, 24, 16, 26, 17, 2)              # beak
+    fill_ellipse(c, 14, 29, 5, 8, 3)        # gold wing
+    rect(c, 36, 24, 41, 27, 3)              # gold tail
+    fill_ellipse(c, 30, 22, 2, 2, 5)        # cheek
+    rect(c, 20, 39, 22, 42, 2)
+    rect(c, 28, 39, 30, 42, 2)
+    px(c, 44, 10, 7)                        # music note dot
+    rect(c, 43, 11, 43, 15, 7)              # note stem
+
 # (draw function, name) per stage, order matches ear_stage_t.
 STAGES = [
     (draw_egg, "egg"), (draw_hatchling, "hatchling"), (draw_chick, "chick"),
     (draw_fledgling, "fledgling"), (draw_songbird, "songbird"),
+    (draw_virtuoso, "virtuoso"), (draw_master, "master"),
+    (draw_legend, "legend"),
 ]
 
 def emit():

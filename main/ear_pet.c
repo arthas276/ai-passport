@@ -4,6 +4,7 @@
 // Cumulative XP thresholds, indexed by stage (stage 0 = Egg starts at 0).
 static const uint32_t STAGE_XP[EAR_STAGE_COUNT] = {
     0, EAR_XP_HATCHLING, EAR_XP_CHICK, EAR_XP_FLEDGLING, EAR_XP_SONGBIRD,
+    EAR_XP_VIRTUOSO, EAR_XP_MASTER, EAR_XP_LEGEND,
 };
 
 // Stage from cumulative XP. XP never decreases, thresholds are monotonic.
@@ -18,7 +19,7 @@ ear_stage_t ear_pet_stage(uint32_t xp) {
 // XP still needed to reach the next stage; 0 at final stage.
 uint32_t ear_pet_xp_to_next(uint32_t xp) {
     ear_stage_t st = ear_pet_stage(xp);
-    if ((int)st >= (int)EAR_STAGE_SONGBIRD) return 0;
+    if ((int)st >= (int)EAR_STAGE_LEGEND) return 0;   // v1.7 final rank
     return STAGE_XP[st + 1] - xp;
 }
 
@@ -32,6 +33,6 @@ uint32_t ear_pet_stage_floor(uint32_t xp) {
 // (see ear_ui.c).
 uint32_t ear_pet_stage_ceiling(uint32_t xp) {
     ear_stage_t st = ear_pet_stage(xp);
-    if ((int)st >= (int)EAR_STAGE_SONGBIRD) return STAGE_XP[st];
+    if ((int)st >= (int)EAR_STAGE_LEGEND) return STAGE_XP[st];   // v1.7
     return STAGE_XP[st + 1];
 }

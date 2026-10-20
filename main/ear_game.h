@@ -12,8 +12,13 @@
 #define EAR_XP_HATCHLING   10u   // Egg -> Hatchling
 #define EAR_XP_CHICK       30u   // Hatchling -> Chick
 #define EAR_XP_FLEDGLING   80u   // Chick -> Fledgling
-#define EAR_XP_SONGBIRD   160u   // Fledgling -> Songbird (final stage)
-#define EAR_STAGE_COUNT    5u
+#define EAR_XP_SONGBIRD   160u   // Fledgling -> Songbird
+// v1.7 endgame ranks: growth no longer stops at Songbird - long-term
+// practice keeps paying with three virtuoso ranks (PRD 4.1).
+#define EAR_XP_VIRTUOSO   320u   // Songbird -> Virtuoso
+#define EAR_XP_MASTER     640u   // Virtuoso -> Master
+#define EAR_XP_LEGEND    1280u   // Master -> Legend (final stage)
+#define EAR_STAGE_COUNT    8u
 
 typedef enum {
     EAR_STAGE_EGG = 0,
@@ -21,6 +26,9 @@ typedef enum {
     EAR_STAGE_CHICK,
     EAR_STAGE_FLEDGLING,
     EAR_STAGE_SONGBIRD,
+    EAR_STAGE_VIRTUOSO,   // v1.7 endgame ranks (thresholds above).
+    EAR_STAGE_MASTER,
+    EAR_STAGE_LEGEND,
 } ear_stage_t;
 
 // XP awards (PRD 4.1): book + persist at the moment of each correct answer.
