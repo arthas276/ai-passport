@@ -5,7 +5,11 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.6 (2026-10-18: interval quiz gains descending and harmonic
+> PRD version: v1.7 (2026-10-20: VS BATTLE mode - two players alternate 10
+> interval questions on one device, the shared pet earns +1 XP per correct
+> answer either way, no perfect bonus / level adjust; endgame ranks extend
+> growth past Songbird - Virtuoso 320 / Master 640 / Legend 1280, reusing the
+> songbird anatomy with palette shifts only); v1.6 (2026-10-18: interval quiz gains descending and harmonic
 > directions - DOWN mixes in at L2, HARMONIC at L3; grading and level rules
 > unchanged); v1.5 (2026-10-18: reset moved to a full-screen confirm page -
 > first hold enters, a second hold within 5 s executes, any key cancels);
@@ -104,7 +108,7 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
   Egg/Hatchling = unison echo (quieter twin voice); Chick = diatonic 3rd
   (below, above when below < C3); Fledgling = diatonic 6th (same rule);
   Songbird = per-note 3rd-or-6th chosen for smooth voice leading
-  (smallest harmony step). Voices clamp to MIDI 48..81 (C3..A5); a voice
+  (smallest harmony step); the v1.7 virtuoso ranks keep this lead tier. Voices clamp to MIDI 48..81 (C3..A5); a voice
   above A5 folds down one octave (> 880 Hz rule)
 - Playback: melody amp 0.9 + harmony amp 0.6 + the harmony doubled one
   octave up at 0.45 on the integer synth (the octave double keeps the
@@ -113,6 +117,20 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
   clamped to 200..900 ms plus an 80 ms gap; REVIEW shows the transcription
   + key before playing
 - < 2 confirmed notes -> "TOO SHORT" -> OK retries the capture
+
+### 3.5 VS Battle mode (v1.7)
+
+- One device, two players: 10 interval questions alternate P1/P2 (P1
+  opens) at the current interval level; the header shows whose turn it is
+  plus the running score ("Q 4/10 P2 3:2", gold)
+- Every correct answer feeds the shared pet +1 XP either way; a wrong
+  answer replays the correct answer (teaching, same as solo quiz)
+- No perfect bonus and no auto level adjust in VS: levels stay
+  solo-driven; the lifetime combo best is a solo stat
+- End: verdict page ("P1 WINS!" / "P2 WINS!" / "DRAW!") + final score
+  + XP gained; OK returns HOME; OK long quits mid-match (earned XP stays)
+- Scoring [PURE ear_vs.c]: turn = question index parity; recording past
+  the end of the match is ignored (no score or index corruption)
 
 ### 3.4 Dictation mode (v1.4)
 
@@ -155,10 +173,11 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
 ## 4. Pet Economy
 
 - Stages (cumulative XP): Egg 0 -> Hatchling 10 -> Chick 30 -> Fledgling 80
-  -> Songbird 160
+  -> Songbird 160 -> Virtuoso 320 -> Master 640 -> Legend 1280 (v1.7
+  endgame: growth continues past Songbird; Legend is the final rank)
 - XP sources: quiz correct +1; perfect session (10/10) +3; sing PASS +2/note;
   duet performed +3 (v1.3); dictation perfect +2, fully correct +1, half or
-  more of the notes correct +1 (v1.4)
+  more of the notes correct +1 (v1.4); VS correct +1 either player (v1.7)
 - Reactions: correct -> pet hop + happy blip; wrong -> head shake; evolve ->
   stage image swap + fanfare + hop x3
 - XP never decreases (no-punishment principle); no dates, no streaks
@@ -170,11 +189,13 @@ HOME
 - top: "EAR BUDDY" title + battery % top-right
 - center: pet sprite 48x48 + XP bar (180x10) + "LV n cur/next" text
 - bottom: mode card cycling INTERVAL / CHORD / SING / DUET / DICTATION /
-  SETUP via UP/DOWN (v1.3 adds DUET; v1.4 adds DICTATION)
+  VS BATTLE / SETUP via UP/DOWN (v1.3 adds DUET; v1.4 adds DICTATION;
+  v1.7 adds VS BATTLE)
 - UP/DOWN click: switch mode card; OK click: enter mode; OK long: nothing
 
-QUIZ
-- header "Q 3/10 LV2"; status "LISTEN..." during playback
+QUIZ (solo and VS)
+- header "Q 3/10 LV2"; VS header "Q 4/10 P2 3:2" (gold, v1.7); status
+  "LISTEN..." during playback
 - options grid: 2 / 4 / 6 cells (100x44 each), cursor highlight
 - footer hints "OK CONFIRM - UPL REPLAY - OKL QUIT" (Montserrat 14)
 - UP long: replay question; OK long: quit session (earned XP stays);
@@ -209,8 +230,9 @@ DICTATION (v1.4, five states)
   "WRONG 1/3" + the sung-back notes (green/red) beside the target; OK ->
   next melody, after 10 -> RESULT
 
-RESULT (after 10 quiz questions)
+RESULT (after 10 quiz questions / VS match)
 - "SCORE 8/10" + "+9 XP" + pet hop anim; OK -> HOME
+- VS verdict (v1.7): "P1 WINS!" / "P2 WINS!" / "DRAW!" + "P1 6 : 4 P2" + XP
 
 SETUP
 - rows: VOLUME (UP/DOWN +/-10, OK save+back); RESET PROGRESS (OK long ->
@@ -257,11 +279,12 @@ main/
                       stage-gated harmony line (v1.3)
   ear_dictation.c/h - [PURE] melody gen + octave-folded, per-level
                        tolerance grading (v1.4)
+  ear_vs.c/h        - [PURE] VS battle turn/scoring/verdict (v1.7)
   ear_tone.c/h      - [PURE] additive synth into int16 buffer (C4-A4 table)
   ear_store.c/h     - NVS load/save (namespace earbuddy)
   ear_audio.c/h     - audio worker task: play queue + mic->pitch->event queue
   ear_ui.c/h        - 6 LVGL pages + backlight idle manager
-  ear_assets.c/h    - pet sprites 5 stages x 2 frames, 48x48 RGB565
+  ear_assets.c/h    - pet sprites 8 stages x 2 frames, 48x48 RGB565
                       descriptors (generated)
 tools/gen_pet_assets.py - pixel-art generator (code-drawn egg/chick/bird ->
                       RGB565 C arrays)
@@ -270,6 +293,7 @@ tests/test_ear_pet.c     - thresholds/XP monotonic/perfect bonus
 tests/test_ear_pitch.c   - synthetic sine PCMs -> detected pitch within tol
 tests/test_ear_dictation.c - level shapes/no repeats/octave-fold grading,
                        per-level tolerance, no-shift extras, partial credit
+tests/test_ear_vs.c     - turn alternation/scoring/verdict/clamping (v1.7)
 
 [PURE] modules: zero IDF/LVGL deps; must compile clean with
 gcc -std=c11 -Wall -Wextra -Werror. Registered in tools/validate.sh
@@ -294,7 +318,7 @@ gcc -std=c11 -Wall -Wextra -Werror. Registered in tools/validate.sh
 | Timbre | synthesized | no licensed samples; params centralized |
 | Range | C4-A4 | tiny-speaker friendly + standard ear-training range |
 | Wrong answers | no penalty | no-punishment principle |
-| Stage thresholds | 10/30/80/160 XP | ~2-3 weeks daily practice to max |
+| Stage thresholds | 10/30/80/160 XP (v1.7 endgame +320/640/1280) | ~2-3 weeks daily practice to Songbird; virtuoso ranks keep long-term practice paying |
 | Sing tolerance | +/-80/55/35 cents | v1.1: 65/45/30 (itself raised from 50) still stalled beginners; loosened one notch after the octave fix |
 | 3 fails -> show answer | yes | avoid stuck states |
 | OK-long quit keeps XP | yes | no-punishment principle |
