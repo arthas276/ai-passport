@@ -5,7 +5,11 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.7 (2026-10-20: VS BATTLE mode - two players alternate 10
+> PRD version: v1.8 (2026-10-20: weakness-weighted quiz draws from persisted
+> per-kind miss counts; RHYTHM mode - hear a bar, tap it back on OK after a
+> count-in, graded on onset timing; SIGHTSING mode - read the on-screen
+> melody, hear only the starting note, sing the whole phrase; see 3.1/3.6/
+> 3.7); v1.7 (2026-10-20: VS BATTLE mode - two players alternate 10
 > interval questions on one device, the shared pet earns +1 XP per correct
 > answer either way, no perfect bonus / level adjust; endgame ranks extend
 > growth past Songbird - Virtuoso 320 / Master 640 / Legend 1280, reusing the
@@ -170,6 +174,40 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
 - Scoring [PURE ear_vs.c]: turn = question index parity; recording past
   the end of the match is ignored (no score or index corruption)
 
+### 3.6 Rhythm mode (v1.8)
+
+- One 4/4 bar of sixteenth slots played twice: bar 1 = four count-in
+  ticks, bar 2 = the pattern's onsets as accent clicks over soft
+  quarter-note backing ticks; the player taps the bar back on OK during
+  bar 2
+- Generation [PURE ear_rhythm.c]: L1 quarter positions only (3-4
+  onsets), L2 adds eighth offbeats (4-6), L3 any sixteenth for
+  syncopation (5-8); the downbeat is always an onset so the tapper has
+  an anchor
+- Grading [PURE]: each onset matches the earliest unused tap inside a
+  tolerance window (beat/3 clamped to 120-220 ms); unmatched taps are
+  extras. >= 2/3 onsets hit = +1 XP; every onset hit with no extras =
+  +2 XP total (perfect)
+- Session: 10 patterns, auto level adjust on rlvl; beat per level
+  700/600/500 ms; UP long replays the same pattern; OK long quits
+  (earned XP stays)
+- Timing: the worker posts PLAY_START right before the first sample,
+  taps are timestamped from it, and PLAY_DONE lands exactly at the
+  tap-bar end, which triggers grading
+
+### 3.7 Sightsing mode (v1.8)
+
+- The melody appears on screen as note names; the device plays only the
+  starting note (UP long replays it), then the player sings the whole
+  phrase at their own tempo - reading replaces listening
+- Generation and grading reuse the dictation chain verbatim (same
+  levels/tolerances/octave folding/partial credit); the level is its
+  own (vlvl); XP identical to dictation; the lifetime melodies counter
+  counts sightsing melodies too
+- States: READY (melody shown) -> STARTNOTE -> WAIT (OK starts the
+  capture, UP long re-plays the note) -> SING -> GRADE -> next, 10
+  melodies per session
+
 ## 4. Pet Economy
 
 - Stages (cumulative XP): Egg 0 -> Hatchling 10 -> Chick 30 -> Fledgling 80
@@ -177,7 +215,13 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
   endgame: growth continues past Songbird; Legend is the final rank)
 - XP sources: quiz correct +1; perfect session (10/10) +3; sing PASS +2/note;
   duet performed +3 (v1.3); dictation perfect +2, fully correct +1, half or
-  more of the notes correct +1 (v1.4); VS correct +1 either player (v1.7)
+  more of the notes correct +1 (v1.4); VS correct +1 either player (v1.7);
+  rhythm >= 2/3 onsets +1, perfect bar +2 (v1.8); sightsing same as
+  dictation (v1.8)
+- Weakness weighting (v1.8): wrong quiz answers bump a per-kind miss
+  counter (persisted as blob "km"); question draws weight each option
+  1 + min(miss, 15), so missed kinds come back more often without ever
+  dominating (the anti-repeat rule still applies)
 - Reactions: correct -> pet hop + happy blip; wrong -> head shake; evolve ->
   stage image swap + fanfare + hop x3
 - XP never decreases (no-punishment principle); no dates, no streaks
@@ -189,8 +233,8 @@ HOME
 - top: "EAR BUDDY" title + battery % top-right
 - center: pet sprite 48x48 + XP bar (180x10) + "LV n cur/next" text
 - bottom: mode card cycling INTERVAL / CHORD / SING / DUET / DICTATION /
-  VS BATTLE / SETUP via UP/DOWN (v1.3 adds DUET; v1.4 adds DICTATION;
-  v1.7 adds VS BATTLE)
+  VS BATTLE / RHYTHM / SIGHTSING / SETUP via UP/DOWN (v1.3 adds DUET; v1.4
+  adds DICTATION; v1.7 adds VS BATTLE; v1.8 adds RHYTHM and SIGHTSING)
 - UP/DOWN click: switch mode card; OK click: enter mode; OK long: nothing
 
 QUIZ (solo and VS)
@@ -261,7 +305,10 @@ answered u32; sing_pass u32; best_combo u8 (lifetime stats, v1.2);
 duets u32 key "du" (lifetime duets, v1.3 — old records default to 0);
 dlvl u8 (dictation level 1-3) key "dl" + melodies u32 key "mel"
 (lifetime melodies with every target note OK - partial credit earns XP but
-  does not count here; both v1.4 — old records default to 1 / 0).
+  does not count here; both v1.4 — old records default to 1 / 0);
+rlvl u8 key "rl" + vlvl u8 key "vl" (rhythm/sightsing levels, v1.8);
+kind_miss u32[EAR_KIND_COUNT] blob "km" (per-kind wrong answers feeding
+the weighted quiz draw, v1.8).
 Read failure -> defaults (new pet). Write on XP change (1-2x per session,
 NVS wear is a non-issue) and on settings change. Write failure -> log only.
 
@@ -280,6 +327,7 @@ main/
   ear_dictation.c/h - [PURE] melody gen + octave-folded, per-level
                        tolerance grading (v1.4)
   ear_vs.c/h        - [PURE] VS battle turn/scoring/verdict (v1.7)
+  ear_rhythm.c/h    - [PURE] rhythm pattern gen + tap grading (v1.8)
   ear_tone.c/h      - [PURE] additive synth into int16 buffer (C4-A4 table)
   ear_store.c/h     - NVS load/save (namespace earbuddy)
   ear_audio.c/h     - audio worker task: play queue + mic->pitch->event queue
@@ -294,6 +342,7 @@ tests/test_ear_pitch.c   - synthetic sine PCMs -> detected pitch within tol
 tests/test_ear_dictation.c - level shapes/no repeats/octave-fold grading,
                        per-level tolerance, no-shift extras, partial credit
 tests/test_ear_vs.c     - turn alternation/scoring/verdict/clamping (v1.7)
+tests/test_ear_rhythm.c - pattern invariants/slot math/tap windows (v1.8)
 
 [PURE] modules: zero IDF/LVGL deps; must compile clean with
 gcc -std=c11 -Wall -Wextra -Werror. Registered in tools/validate.sh

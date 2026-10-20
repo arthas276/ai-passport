@@ -5,7 +5,10 @@
 > 状态：可进入固件实现
 > 硬件：FoloToy AI Passport（ESP32-C3，240x320 ST7789P3，三 ADC 按键，ES8311）
 > 目标分支：feature/ear-buddy（自 main 建立）
-> PRD 版本：v1.7（2026-10-20：VS 对战模式——两人轮流作答 10 道听辨题，
+> PRD 版本：v1.8（2026-10-20：听辨按各类错题次数加权出题（持久化）；节奏听写——
+> 听一小节后在数拍后用 OK 键拍回来，按击点时刻判分；视唱——看屏上音名，
+> 只给起音，整句自己唱；见 3.1/3.6/3.7）；
+> v1.7（2026-10-20：VS 对战模式——两人轮流作答 10 道听辨题，
 > 共享宠物每次答对都得 +1 XP，无满勤奖励/难度调整；终局段位延伸成长线——
 > 演奏家 320 / 大师 640 / 传奇 1280，仅沿用鸣禽结构与色板递进）；
 > v1.6（2026-10-18：听辨音程加入下行与和声方向——L2 起混入下行、
@@ -131,22 +134,49 @@
 - 计分 [PURE ear_vs.c]：回合 = 题序奇偶；比赛结束后再 record 会被忽略
   （不污染比分与题序）
 
-### 3.6 宠物经济
+### 3.6 节奏听写（v1.8）
+
+- 一小节 4/4（十六分格）播两遍：第一小节四拍数拍，第二小节题面击点
+  作重音、四分拍作轻声底拍；玩家在第二小节用 OK 键把节奏拍回来
+- 生成 [PURE ear_rhythm.c]：L1 只用四分位（3-4 击）；L2 加八分
+  反拍（4-6）；L3 任意十六分位可切分（5-8）；首拍必为击点，
+  拍者有锚
+- 判分 [PURE]：每个击点匹配窗口内最早的未用击拍（容差 = 拍长/3，
+  夹在 120-220ms）；多余击拍记 extras。击中 ≥2/3 +1 XP；
+  全中且无多余共 +2 XP（perfect）
+- 一局 10 条，rlvl 自动调级；每级拍长 700/600/500ms；UP 长按重播
+  本条；OK 长按退局（已得 XP 保留）
+- 计时：worker 在第一个采样前发 PLAY_START，击拍从它起算；
+  PLAY_DONE 恰落在拍完小节末，触发判分
+
+### 3.7 视唱（v1.8）
+
+- 屏上显示音名序列，设备只播起音（UP 长按重听），玩家按自己的
+  节奏把整句唱完——用“看”替代“听”
+- 生成与判分整体复用听写链路（同级别/容差/八度折叠/部分给分）；
+> 独立级别 vlvl；XP 与听写相同；生涯唱对旋律数含视唱
+- 状态：READY（展示旋律）-> STARTNOTE -> WAIT（OK 开始收音，
+  UP 长按重播起音）-> SING -> GRADE -> 下一条，一局 10 段
+
+### 3.8 宠物经济
 
 - 阶段阈值（累计 XP）：蛋 0 -> 破壳 10 -> 雏鸟 30 -> 幼鸟 80 -> 鸣禽 160
   -> 演奏家 320 -> 大师 640 -> 传奇 1280（v1.7 终局：鸣禽之后继续成长，
   传奇为最终段位）
 - XP 来源：听辨答对 +1；满勤（10/10）+3；唱准 +2/次；二重唱 +3/次（v1.3）；
   听写全对 +2、目标音全 OK +1、过半目标音 OK +1（v1.4）；对战答对 +1，
-  任一玩家均计（v1.7）
+  任一玩家均计（v1.7）；节奏 ≥2/3 击中 +1、全中 +2（v1.8）；视唱同听写（v1.8）
+- 弱点加权（v1.8）：听辨答错记一次该类错题（blob "km" 持久化）；
+  出题权重 = 1 + min(错次, 15)，常错的类型更常出但不独占（防连出规则仍生效）
 - 反应：答对宠物跳 + 音效；答错摇头；进化 = 阶段图切换 + 号角 + 跳 x3
 - XP 永不减少；NVS 读取失败按新宠物处理，不崩溃
 
 ## 4. 画面与按键（重新设计，不沿用 demo 外壳）
 
 HOME：标题 + 右上角电量；宠物图 48x48 居中；XP 条 + 文本；底部模式卡
-（INTERVAL/CHORD/SING/DUET/DICTATION/VS BATTLE/SETUP，UP/DOWN 切换，OK 进入；
-v1.3 增 DUET，v1.4 增 DICTATION，v1.7 增 VS BATTLE）。
+（INTERVAL/CHORD/SING/DUET/DICTATION/VS BATTLE/RHYTHM/SIGHTSING/SETUP，
+UP/DOWN 切换，OK 进入；v1.3 增 DUET，v1.4 增 DICTATION，v1.7 增 VS，
+v1.8 增 RHYTHM 与 SIGHTSING）。
 QUIZ（单人与对战共用）：头部 "Q 3/10 LV2"；对战头部 "Q 4/10 P2 3:2"
 （金色，v1.7）；状态行 LISTEN.../判定反馈；选项网格 2/4/6 格；
 底部按键提示。UP 长按重播题目；OK 长按退局（已得 XP 保留）。
@@ -175,7 +205,9 @@ answered u32；sing_pass u32；best_combo u8（生涯统计，v1.2）；
 duets u32，键 "du"（生涯二重唱次数，v1.3，旧档默认 0）；
 dlvl u8（听写级别 1-3），键 "dl"；melodies u32，键 "mel"
 （生涯目标音全部 OK 的旋律数——部分给分只加 XP，不计入此项；v1.4 两项，
-旧档默认 1 / 0）。
+旧档默认 1 / 0）；rlvl u8，键 "rl"；vlvl u8，键 "vl"
+（节奏/视唱级别，v1.8）；kind_miss u32[EAR_KIND_COUNT]，blob "km"
+（各类错题次数，驱动加权出题，v1.8）。
 读取失败按默认（新宠物）；XP 变化即写（每局 1-2 次，NVS 磨损无忧）；写失败仅日志。
 
 ## 6. 技术架构
@@ -189,6 +221,7 @@ main/
   ear_duet.c        - [PURE] 乐句分段 / 调性推断 / 阶段门控和声（v1.3）
   ear_dictation.c/h - [PURE] 旋律生成 + 八度折叠、分级容差判定（v1.4）
   ear_vs.c/h        - [PURE] 对战回合/计分/判定（v1.7）
+  ear_rhythm.c/h    - [PURE] 节奏生成 + 击拍判分（v1.8）
   ear_tone.c        - [PURE] 加性合成（C4-A4，16000Hz）
   ear_store.c/h     - NVS 持久化（namespace earbuddy）
   ear_audio.c/h     - 单一音频 worker：播放队列 + mic->pitch->事件
@@ -197,6 +230,7 @@ main/
 tools/gen_pet_assets.py - 像素画生成器
 tests/test_ear_model.c / test_ear_pet.c / test_ear_pitch.c / test_ear_tone.c
       / test_ear_duet.c / test_ear_dictation.c / test_ear_vs.c
+      / test_ear_rhythm.c
 
 [PURE] 模块零 IDF/LVGL 依赖，gcc -std=c11 -Wall -Wextra -Werror 编译通过并
 已注册进 tools/validate.sh（funbox 先例：feature 分支可改 validate.sh）。
