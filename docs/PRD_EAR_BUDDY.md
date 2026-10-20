@@ -118,20 +118,6 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
   + key before playing
 - < 2 confirmed notes -> "TOO SHORT" -> OK retries the capture
 
-### 3.5 VS Battle mode (v1.7)
-
-- One device, two players: 10 interval questions alternate P1/P2 (P1
-  opens) at the current interval level; the header shows whose turn it is
-  plus the running score ("Q 4/10 P2 3:2", gold)
-- Every correct answer feeds the shared pet +1 XP either way; a wrong
-  answer replays the correct answer (teaching, same as solo quiz)
-- No perfect bonus and no auto level adjust in VS: levels stay
-  solo-driven; the lifetime combo best is a solo stat
-- End: verdict page ("P1 WINS!" / "P2 WINS!" / "DRAW!") + final score
-  + XP gained; OK returns HOME; OK long quits mid-match (earned XP stays)
-- Scoring [PURE ear_vs.c]: turn = question index parity; recording past
-  the end of the match is ignored (no score or index corruption)
-
 ### 3.4 Dictation mode (v1.4)
 
 - Same idea as DUET, reversed: the device plays a short melody; the user
@@ -169,6 +155,20 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
 - Keys: OK advances the state; UP replays the melody at ECHO; OK long
   quits the session (earned XP stays); the RESULT totals row shows the
   lifetime count of melodies sung back correctly
+
+### 3.5 VS Battle mode (v1.7)
+
+- One device, two players: 10 interval questions alternate P1/P2 (P1
+  opens) at the current interval level; the header shows whose turn it is
+  plus the running score ("Q 4/10 P2 3:2", gold)
+- Every correct answer feeds the shared pet +1 XP either way; a wrong
+  answer replays the correct answer (teaching, same as solo quiz)
+- No perfect bonus and no auto level adjust in VS: levels stay
+  solo-driven; the lifetime combo best is a solo stat
+- End: verdict page ("P1 WINS!" / "P2 WINS!" / "DRAW!") + final score
+  + XP gained; OK returns HOME; OK long quits mid-match (earned XP stays)
+- Scoring [PURE ear_vs.c]: turn = question index parity; recording past
+  the end of the match is ignored (no score or index corruption)
 
 ## 4. Pet Economy
 
