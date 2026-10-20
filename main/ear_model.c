@@ -49,10 +49,34 @@ void ear_model_session_init(ear_session_t *s, ear_mode_t mode, uint8_t level) {
     s->prev_kind = 0xFFu;   // "no previous question yet"
 }
 
-// Draw one kind uniformly from the level's option list.
+// Weakness weighting (v1.8): per-kind miss counts bias the draw. The
+// contribution is capped so one badly-missed kind dominates without
+// becoming the only question; NULL/zero counts draw uniformly.
+static const uint32_t *s_miss;
+#define MISS_CAP 15u
+
+// Draw one kind from the level's option list, weighted by miss counts.
 static ear_kind_t draw_kind(const ear_session_t *s) {
     uint8_t n = EAR_LEVEL_OPT_COUNT[s->mode][s->level - 1];
-    return (ear_kind_t)EAR_LEVELS[s->mode][s->level - 1][rand() % n];
+    const uint8_t *opts = EAR_LEVELS[s->mode][s->level - 1];
+    uint32_t total = 0;
+    uint32_t w[EAR_OPTS_MAX];
+    for (uint8_t i = 0; i < n; i++) {
+        uint32_t m = s_miss ? s_miss[opts[i]] : 0;
+        if (m > MISS_CAP) m = MISS_CAP;
+        w[i] = 1u + m;
+        total += w[i];
+    }
+    uint32_t r = rand() % total;
+    for (uint8_t i = 0; i < n; i++) {
+        if (r < w[i]) return (ear_kind_t)opts[i];
+        r -= w[i];
+    }
+    return (ear_kind_t)opts[n - 1];   // unreachable modulo rounding
+}
+
+void ear_model_set_miss(const uint32_t *miss_per_kind) {
+    s_miss = miss_per_kind;
 }
 
 // Shuffle the option list (Fisher-Yates) so the answer position is random.

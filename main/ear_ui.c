@@ -5,6 +5,7 @@
 #include "ear_duet.h"
 #include "ear_dictation.h"
 #include "ear_vs.h"
+#include "ear_rhythm.h"
 #include "ear_store.h"
 #include "bsp_display.h"
 #include "bsp_battery.h"
@@ -37,7 +38,7 @@ static bool s_evolve_pending;    // stage changed, celebrate at HOME entry
 // ---- current screen ----
 typedef enum {
     SCR_HOME, SCR_QUIZ, SCR_SING, SCR_DUET, SCR_DICTATION, SCR_RESULT, SCR_SETUP,
-    SCR_RESET,
+    SCR_RESET, SCR_RHY, SCR_SIGHTSING,
 } ear_screen_t;
 static ear_screen_t s_scr;
 
@@ -49,6 +50,29 @@ static bool s_advancing;         // next PLAY_DONE advances the question
 static uint32_t s_sess_xp;       // XP gained this session (RESULT page)
 static bool s_vs;                // quiz screen is a VS BATTLE match (v1.7)
 static ear_vs_t s_vsst;          // VS turn/score state for the match
+
+// ---- RHYTHM flow state (v1.8) ----
+static uint8_t s_rh_state;
+#define RH_READY 0u
+#define RH_PLAY  1u
+#define RH_TAP   2u
+#define RH_GRADE 3u
+static ear_rhythm_session_t s_rhy;
+static ear_rhythm_pattern_t s_rh_pat;
+static uint32_t s_rh_t0;                     // PLAY_START timestamp (ms)
+static uint32_t s_rh_taps[EAR_RHY_TAPS_MAX];
+static uint8_t s_rh_tap_count;
+static bool s_rh_advancing;                  // grade cue done -> next
+
+// ---- SIGHTSING flow state (v1.8) ----
+static uint8_t s_ss_state;
+#define SS_READY     0u
+#define SS_STARTNOTE 1u
+#define SS_WAIT      2u
+#define SS_SING      3u
+#define SS_GRADE     4u
+static ear_dictation_session_t s_ss;
+static ear_dictation_melody_t s_ss_mel;
 
 // ---- home mode card (includes SETUP as 4th entry) ----
 static uint8_t s_mode_card;
@@ -67,6 +91,9 @@ static lv_obj_t *dc_scr, *dc_title, *dc_prog, *dc_pet, *dc_notes, *dc_sung, *dc_
 static lv_obj_t *r_scr, *r_score, *r_xp, *r_tot;
 static lv_obj_t *s1_scr, *s1_vol, *s1_reset, *s1_hint, *s1_batt;
 static lv_obj_t *rs_scr, *rs_title, *rs_warn, *rs_hint;   // RESET confirm page
+static lv_obj_t *rh_scr, *rh_prog, *rh_status, *rh_taps_lbl, *rh_hint;
+static lv_obj_t *ss_scr, *ss_title, *ss_prog, *ss_notes, *ss_sung, *ss_status,
+    *ss_hint;
 
 // ---- helpers ----
 // Null-safe label update; objects of inactive screens do not exist.
@@ -126,13 +153,13 @@ static void enter_sing(void);
 static void enter_duet(void);
 static void enter_dictation(void);
 static void enter_setup(void);
-
 // ---- HOME ----
 // Mode card names (index = s_mode_card: 0 INTERVAL 1 CHORD 2 SING 3 DUET
-// 4 DICTATION 5 VS 6 SETUP).
-static const char *MODE_NAMES[7] = {
+// 4 DICTATION 5 VS 6 RHYTHM 7 SIGHTSING 8 SETUP).
+static const char *MODE_NAMES[9] = {
     "MODE: INTERVAL", "MODE: CHORD", "MODE: SING", "MODE: DUET",
-    "MODE: DICTATION", "MODE: VS BATTLE",
+    "MODE: DICTATION", "MODE: VS BATTLE", "MODE: RHYTHM",
+    "MODE: SIGHTSING",
     "MODE: SETUP",
 };
 
@@ -284,6 +311,7 @@ static void quiz_load_question(void) {
 static void enter_quiz(ear_mode_t mode) {
     uint8_t lvl = (mode == EAR_MODE_INTERVAL) ? s_save.ilvl : s_save.clvl;
     ear_model_session_init(&s_sess, mode, lvl);
+    ear_model_set_miss(s_save.kind_miss);   // weakness-weighted draw (v1.8)
     s_sess_xp = 0;
     s_vs = false;                   // solo entry; enter_vs() re-arms the flag
     if (q_scr) { lv_obj_delete(q_scr); q_scr = NULL; }
@@ -393,6 +421,10 @@ static void grade_answer(void) {
     s_awaiting_answer = false;
     bool correct = ear_model_grade(&s_sess, &s_q, s_cursor);
     if (s_vs) ear_vs_record(&s_vsst, correct);   // v1.7 VS scoring
+    if (!correct) {                              // v1.8 weakness tracking
+        s_save.kind_miss[s_q.answer]++;
+        ear_store_save(&s_save);
+    }
     if (correct) {
         s_save.answered++;            // lifetime stats (v1.2)
         if (!s_vs && s_sess.combo > s_save.best_combo) {
@@ -1080,6 +1112,346 @@ static void dict_audio_ev(ear_audio_event_t *ev) {
     }
 }
 
+// ---- RHYTHM (v1.8, PRD 3.6) ----
+// Four states on one screen: READY -> PLAY (count-in + pattern) -> TAP
+// (backing ticks, OK records a tap) -> GRADE; ten patterns per session.
+// Tap timestamps run from the PLAY_START event; PLAY_DONE lands exactly at
+// the tap-bar end and triggers grading, then the grade cue advances.
+static void rh_refresh_ready(void) {
+    s_rh_state = RH_READY;
+    char p[48];
+    snprintf(p, sizeof(p), "PATTERN %u/%u  LV%u", (unsigned)(s_rhy.index + 1),
+             (unsigned)EAR_RHY_PATTERNS, (unsigned)s_rhy.level);
+    lbl(rh_prog, p, C_MUTED);
+    lbl(rh_taps_lbl, "", C_MUTED);
+    lbl(rh_status, "READY", C_CYAN);
+    lbl(rh_hint, "OK PLAY  UPL REPLAY  OKL EXIT", C_MUTED);
+}
+
+static void rh_start_play(void) {
+    s_rh_state = RH_PLAY;
+    s_rh_tap_count = 0;
+    lbl(rh_status, "COUNT IN...", C_CYAN);
+    lbl(rh_hint, "OKL EXIT", C_MUTED);
+    ear_audio_play_rhythm(s_rh_pat.onsets,
+                          EAR_RHY_BEAT_MS[s_rhy.level - 1]);
+}
+
+static void rh_grade(void) {
+    bool perfect = false;
+    uint8_t total = ear_rhythm_onset_count(&s_rh_pat);
+    uint8_t hits = ear_rhythm_grade(&s_rh_pat,
+                                    EAR_RHY_BEAT_MS[s_rhy.level - 1],
+                                    s_rh_taps, s_rh_tap_count, &perfect);
+    bool pass = hits * 3u >= total * 2u;
+    uint32_t gain = 0;
+    if (pass) {
+        s_rhy.score++;
+        gain = EAR_XP_RHY_PASS;
+        if (perfect) gain += EAR_XP_RHY_PERFECT;
+        award_xp(gain);
+        s_sess_xp += gain;
+    }
+    char t[48];
+    snprintf(t, sizeof(t), "%s %u/%u +%lu XP",
+             perfect ? "PERFECT!" : (pass ? "HIT" : "MISS"),
+             (unsigned)hits, (unsigned)total, (unsigned long)gain);
+    lbl(rh_status, t, pass ? C_OK : C_BAD);
+    s_rh_state = RH_GRADE;
+    s_rh_advancing = true;
+    ear_audio_play_cue(pass ? 0 : 1);
+}
+
+static void rh_next(void) {
+    s_rhy.index++;
+    if (s_rhy.index >= EAR_RHY_PATTERNS) {
+        bool changed = false;
+        uint8_t new_lvl = auto_level_adjust(s_save.rlvl, s_rhy.score,
+                                            &changed);
+        if (changed) s_save.rlvl = new_lvl;
+        ear_store_save(&s_save);
+        enter_result_common(s_rhy.score, EAR_RHY_PATTERNS, s_sess_xp);
+        return;
+    }
+    ear_rhythm_next_pattern(&s_rhy, &s_rh_pat);
+    rh_refresh_ready();
+}
+
+static void enter_rhythm(void) {
+    if (rh_scr) { lv_obj_delete(rh_scr); rh_scr = NULL; }
+    s_scr = SCR_RHY;
+    rh_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(rh_scr, lv_color_hex(C_BG), 0);
+
+    lv_obj_t *title = lv_label_create(rh_scr);
+    lv_label_set_text(title, "RHYTHM");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(C_GOLD), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
+
+    rh_prog = lv_label_create(rh_scr);
+    lv_obj_set_style_text_font(rh_prog, &lv_font_montserrat_14, 0);
+    lv_obj_align(rh_prog, LV_ALIGN_TOP_MID, 0, 46);
+
+    rh_status = lv_label_create(rh_scr);
+    lv_obj_set_style_text_font(rh_status, &lv_font_montserrat_20, 0);
+    lv_obj_align(rh_status, LV_ALIGN_TOP_MID, 0, 120);
+
+    rh_taps_lbl = lv_label_create(rh_scr);
+    lv_obj_set_style_text_font(rh_taps_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_align(rh_taps_lbl, LV_ALIGN_TOP_MID, 0, 165);
+
+    rh_hint = lv_label_create(rh_scr);
+    lv_obj_set_style_text_font(rh_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(rh_hint, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(rh_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_screen_load(rh_scr);
+    ear_rhythm_session_init(&s_rhy, s_save.rlvl, esp_random());
+    ear_rhythm_next_pattern(&s_rhy, &s_rh_pat);
+    s_sess_xp = 0;
+    s_rh_advancing = false;
+    rh_refresh_ready();
+}
+
+static void rh_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+    if (ev == BSP_BTN_LONG) {
+        if (btn == BSP_BTN_OK) {
+            ear_audio_sing_cancel();   // abort playback, back HOME
+            enter_home();
+        } else if (btn == BSP_BTN_UP && s_rh_state == RH_READY) {
+            rh_start_play();           // replay the same pattern
+        }
+        return;
+    }
+    if (ev != BSP_BTN_CLICK) return;
+    if (btn == BSP_BTN_OK) {
+        if (s_rh_state == RH_READY) {
+            rh_start_play();
+        } else if (s_rh_state == RH_TAP &&
+                   s_rh_tap_count < EAR_RHY_TAPS_MAX) {
+            s_rh_taps[s_rh_tap_count++] =
+                (uint32_t)(esp_timer_get_time() / 1000) - s_rh_t0;
+            char t[24];
+            snprintf(t, sizeof(t), "TAP %u", (unsigned)s_rh_tap_count);
+            lbl(rh_taps_lbl, t, C_CYAN);
+        } else if (s_rh_state == RH_GRADE) {
+            rh_next();   // skip the cue wait
+        }
+    }
+}
+
+static void rh_audio_ev(ear_audio_event_t *ev) {
+    if (ev->kind == EAR_AUDIO_EV_PLAY_START && s_rh_state == RH_PLAY) {
+        s_rh_t0 = (uint32_t)(esp_timer_get_time() / 1000);
+        s_rh_state = RH_TAP;
+        lbl(rh_status, "TAP IT!", C_GOLD);
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_PLAY_DONE) {
+        if (s_rh_advancing) {
+            s_rh_advancing = false;
+            rh_next();
+        } else if (s_rh_state == RH_TAP) {
+            rh_grade();
+        }
+    }
+}
+
+// ---- SIGHTSING (v1.8, PRD 3.7) ----
+// Read the on-screen melody, hear only the starting note, sing the whole
+// phrase at your own tempo. Generation and grading reuse the dictation
+// chain verbatim; the level is its own (vlvl). States: READY ->
+// STARTNOTE -> WAIT -> SING -> GRADE.
+static void ss_refresh_ready(void) {
+    s_ss_state = SS_READY;
+    char p[48];
+    snprintf(p, sizeof(p), "MELODY %u/%u  LV%u %s",
+             (unsigned)(s_ss.index + 1),
+             (unsigned)EAR_QUESTIONS_PER_SESSION, (unsigned)s_ss.level,
+             EAR_DICT_TOL_NAME[s_ss.level - 1]);
+    lbl(ss_prog, p, C_MUTED);
+    char mbuf[EAR_DICTATION_MAX_NOTES * 6];
+    note_list_text(mbuf, sizeof(mbuf), s_ss_mel.notes, s_ss_mel.count);
+    lbl(ss_notes, mbuf, C_TEXT);
+    lbl(ss_sung, "", C_MUTED);
+    lbl(ss_status, "READ + SING", C_CYAN);
+    lbl(ss_hint, "OK START NOTE  OKL EXIT", C_MUTED);
+}
+
+static void ss_start_note(void) {
+    s_ss_state = SS_STARTNOTE;
+    lbl(ss_status, "START NOTE...", C_CYAN);
+    lbl(ss_hint, "OKL EXIT", C_MUTED);
+    ear_audio_play_target(s_ss_mel.notes[0]);
+}
+
+static void ss_show_wait(void) {
+    s_ss_state = SS_WAIT;
+    lbl(ss_status, "SING WHEN READY", C_GOLD);
+    lbl(ss_hint, "OK SING  UPL RE-NOTE  OKL EXIT", C_MUTED);
+}
+
+static void ss_start_sing(void) {
+    s_ss_state = SS_SING;
+    lbl(ss_status, "SING NOW", C_GOLD);
+    lbl(ss_hint, "OKL EXIT", C_MUTED);
+    ear_audio_dict_capture(s_ss_mel.count);
+}
+
+// Same rewards and verdict text as dictation: TARGET stays on the notes
+// line, YOU appears under it after grading (v1.8 reuses the v1.4 rules).
+static void ss_grade(void) {
+    const ear_duet_phrase_t *sung = ear_audio_dict_phrase();
+    if (sung->count < EAR_DICTATION_MIN_NOTES) {
+        lbl(ss_status, "TOO SHORT", C_BAD);
+        lbl(ss_hint, "OK RETRY  OKL EXIT", C_MUTED);
+        s_ss_state = SS_WAIT;
+        return;
+    }
+    ear_dictation_result_t res;
+    ear_dictation_grade(&s_ss_mel, sung, s_ss.level, &res);
+    bool correct = ear_dictation_melody_correct(&res);
+    bool perfect = ear_dictation_melody_perfect(&res);
+
+    char slist[EAR_DICTATION_MAX_NOTES * 6];
+    uint8_t heard[EAR_DICTATION_MAX_NOTES];
+    for (uint8_t i = 0; i < res.count; i++) heard[i] = res.notes[i].sung;
+    dict_mark_text(slist, sizeof(slist), heard, res.count);
+    char sbuf[EAR_DICTATION_MAX_NOTES * 6 + 8];
+    snprintf(sbuf, sizeof(sbuf), "YOU %s", slist);
+    lbl(ss_sung, sbuf, correct ? C_OK : C_BAD);
+
+    char t[40];
+    if (correct) {
+        s_ss.score++;
+        s_save.melodies++;
+        uint32_t gain = EAR_XP_DICT_CORRECT;
+        if (perfect) gain += EAR_XP_DICT_PERFECT;
+        award_xp(gain);
+        s_sess_xp += gain;
+        snprintf(t, sizeof(t), "%s +%lu XP",
+                 perfect ? "PERFECT!" : "RIGHT!", (unsigned long)gain);
+        lbl(ss_status, t, C_OK);
+        ear_audio_play_cue(0);
+    } else if (res.correct_notes * 2u >= s_ss_mel.count) {
+        uint32_t gain = EAR_XP_DICT_PARTIAL;
+        award_xp(gain);
+        s_sess_xp += gain;
+        snprintf(t, sizeof(t), "CLOSE %u/%u +%lu XP",
+                 (unsigned)res.correct_notes, (unsigned)s_ss_mel.count,
+                 (unsigned long)gain);
+        lbl(ss_status, t, C_GOLD);
+        ear_audio_play_cue(1);
+    } else {
+        snprintf(t, sizeof(t), "WRONG %u/%u", (unsigned)res.correct_notes,
+                 (unsigned)s_ss_mel.count);
+        lbl(ss_status, t, C_BAD);
+        ear_audio_play_cue(1);
+    }
+    lbl(ss_hint, "OK NEXT", C_MUTED);
+    s_ss_state = SS_GRADE;
+}
+
+static void ss_next(void) {
+    s_ss.index++;
+    if (s_ss.index >= EAR_QUESTIONS_PER_SESSION) {
+        bool changed = false;
+        uint8_t new_lvl = auto_level_adjust(s_save.vlvl, s_ss.score,
+                                            &changed);
+        if (changed) s_save.vlvl = new_lvl;
+        ear_store_save(&s_save);
+        enter_result_common(s_ss.score, EAR_QUESTIONS_PER_SESSION, s_sess_xp);
+        return;
+    }
+    ear_dictation_next_melody(&s_ss, &s_ss_mel);
+    ss_refresh_ready();
+}
+
+static void enter_sightsing(void) {
+    if (ss_scr) { lv_obj_delete(ss_scr); ss_scr = NULL; }
+    s_scr = SCR_SIGHTSING;
+    ss_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(ss_scr, lv_color_hex(C_BG), 0);
+
+    ss_title = lv_label_create(ss_scr);
+    lv_label_set_text(ss_title, "SIGHTSING");
+    lv_obj_set_style_text_font(ss_title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(ss_title, lv_color_hex(C_GOLD), 0);
+    lv_obj_align(ss_title, LV_ALIGN_TOP_MID, 0, 14);
+
+    ss_prog = lv_label_create(ss_scr);
+    lv_obj_set_style_text_font(ss_prog, &lv_font_montserrat_14, 0);
+    lv_obj_align(ss_prog, LV_ALIGN_TOP_MID, 0, 46);
+
+    ss_notes = lv_label_create(ss_scr);
+    lv_obj_set_style_text_font(ss_notes, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(ss_notes, 220);
+    lv_obj_set_style_text_align(ss_notes, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(ss_notes, LV_ALIGN_TOP_MID, 0, 150);
+
+    ss_sung = lv_label_create(ss_scr);
+    lv_obj_set_style_text_font(ss_sung, &lv_font_montserrat_14, 0);
+    lv_obj_set_width(ss_sung, 220);
+    lv_obj_set_style_text_align(ss_sung, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(ss_sung, LV_ALIGN_TOP_MID, 0, 174);
+
+    ss_status = lv_label_create(ss_scr);
+    lv_obj_set_style_text_font(ss_status, &lv_font_montserrat_20, 0);
+    lv_obj_align(ss_status, LV_ALIGN_TOP_MID, 0, 210);
+
+    ss_hint = lv_label_create(ss_scr);
+    lv_obj_set_style_text_font(ss_hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ss_hint, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(ss_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_screen_load(ss_scr);
+    ear_dictation_session_init(&s_ss, s_save.vlvl, esp_random());
+    ear_dictation_next_melody(&s_ss, &s_ss_mel);
+    s_sess_xp = 0;
+    ss_refresh_ready();
+}
+
+static void ss_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+    if (ev == BSP_BTN_LONG) {
+        if (btn == BSP_BTN_OK) {
+            ear_audio_sing_cancel();
+            enter_home();
+        } else if (btn == BSP_BTN_UP &&
+                   (s_ss_state == SS_WAIT || s_ss_state == SS_READY)) {
+            ss_start_note();   // hear the starting note again
+        }
+        return;
+    }
+    if (ev != BSP_BTN_CLICK) return;
+    if (btn == BSP_BTN_OK) {
+        if (s_ss_state == SS_READY) ss_start_note();
+        else if (s_ss_state == SS_WAIT) ss_start_sing();
+        else if (s_ss_state == SS_GRADE) ss_next();
+    }
+}
+
+static void ss_audio_ev(ear_audio_event_t *ev) {
+    if (ev->kind == EAR_AUDIO_EV_PLAY_DONE && s_ss_state == SS_STARTNOTE) {
+        ss_show_wait();
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_PITCH && s_ss_state == SS_SING) {
+        if (ev->hz > 0.0f) {
+            char nb[5];
+            duet_note_label(nb, sizeof(nb), ear_note_from_hz(ev->hz));
+            char t[32];
+            snprintf(t, sizeof(t), "NOTES %u  %s", (unsigned)ev->pct, nb);
+            lbl(ss_status, t, C_TEXT);
+        } else {
+            lbl(ss_status, "...", C_MUTED);
+        }
+        return;
+    }
+    if (ev->kind == EAR_AUDIO_EV_DUET_PHRASE && s_ss_state == SS_SING) {
+        ss_grade();
+        return;
+    }
+}
+
 // ---- RESULT ----
 // VS match end: verdict + final score + the XP the shared pet earned.
 static void enter_vs_result(void) {
@@ -1266,6 +1638,8 @@ static void reset_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         memset(&s_save, 0, sizeof(s_save));
         s_save.ilvl = s_save.clvl = s_save.slvl = 1;
         s_save.dlvl = 1;
+        s_save.rlvl = 1;
+        s_save.vlvl = 1;
         s_save.vol = vol;
         ear_store_save(&s_save);
         enter_home();
@@ -1301,10 +1675,10 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     case SCR_HOME:
         if (ev != BSP_BTN_CLICK) return;
         if (btn == BSP_BTN_UP) {
-            s_mode_card = (uint8_t)((s_mode_card + 6) % 7);
+            s_mode_card = (uint8_t)((s_mode_card + 8) % 9);
             home_refresh();
         } else if (btn == BSP_BTN_DOWN) {
-            s_mode_card = (uint8_t)((s_mode_card + 1) % 7);
+            s_mode_card = (uint8_t)((s_mode_card + 1) % 9);
             home_refresh();
         } else if (btn == BSP_BTN_OK) {
             if (s_mode_card == 0) enter_quiz(EAR_MODE_INTERVAL);
@@ -1313,6 +1687,8 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             else if (s_mode_card == 3) enter_duet();
             else if (s_mode_card == 4) enter_dictation();
             else if (s_mode_card == 5) enter_vs();
+            else if (s_mode_card == 6) enter_rhythm();
+            else if (s_mode_card == 7) enter_sightsing();
             else enter_setup();
         }
         break;
@@ -1320,6 +1696,8 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     case SCR_SING: sing_key(btn, ev); break;
     case SCR_DUET: duet_key_ev(btn, ev); break;
     case SCR_DICTATION: dict_key(btn, ev); break;
+    case SCR_RHY: rh_key(btn, ev); break;
+    case SCR_SIGHTSING: ss_key(btn, ev); break;
     case SCR_RESULT: result_key(btn, ev); break;
     case SCR_SETUP: setup_key(btn, ev); break;
     case SCR_RESET: reset_key(btn, ev); break;
@@ -1334,6 +1712,8 @@ void ear_ui_handle_audio(ear_audio_event_t *ev) {
     case SCR_SING: sing_audio(ev); break;
     case SCR_DUET: duet_audio_ev(ev); break;
     case SCR_DICTATION: dict_audio_ev(ev); break;
+    case SCR_RHY: rh_audio_ev(ev); break;
+    case SCR_SIGHTSING: ss_audio_ev(ev); break;
     default: break;   // HOME/RESULT/SETUP/RESET ignore worker events
     }
 }

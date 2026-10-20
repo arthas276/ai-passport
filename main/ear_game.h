@@ -40,6 +40,8 @@ typedef enum {
 #define EAR_XP_DICT_CORRECT  1u   // per fully-correct melody, first try (v1.4)
 #define EAR_XP_DICT_PERFECT  2u   // extra when the melody was exact (v1.4)
 #define EAR_XP_DICT_PARTIAL  1u   // half the melody right, keeps practice going
+#define EAR_XP_RHY_PASS      1u   // rhythm pattern with >= 2/3 onsets hit (v1.8)
+#define EAR_XP_RHY_PERFECT   2u   // every onset hit, no extra taps (v1.8)
 
 // ---------------------------------------------------------------------------
 // Quiz model
@@ -117,6 +119,10 @@ typedef struct {
 // --- quiz model API (ear_model.c, pure) ---
 // Fill a fresh session. mode must be INTERVAL or CHORD. level 1..3.
 void ear_model_session_init(ear_session_t *s, ear_mode_t mode, uint8_t level);
+// Weakness-weighted question draw (v1.8): miss counts per kind (indexed by
+// ear_kind_t, from the persisted store) bias the answer toward kinds the
+// user gets wrong; NULL resets to uniform drawing.
+void ear_model_set_miss(const uint32_t *miss_per_kind);
 // Generate the NEXT question into *q. Draws a root in 60..69 and an answer
 // from the level option table; never repeats the previous answer kind, and
 // shuffles the option list so the answer position is random.

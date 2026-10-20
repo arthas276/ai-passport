@@ -3,6 +3,7 @@
 // sequence, so playback and capture at the same 16 kHz still never overlap).
 #include "ear_audio.h"
 #include "ear_duet.h"
+#include "ear_rhythm.h"
 #include "bsp_audio.h"
 #include "bsp_display.h" // not used here; events go through the queue
 #include "esp_log.h"
@@ -37,6 +38,8 @@ typedef struct {
     uint16_t note_ms;                         // ms per melody note
     uint8_t expect;                           // CMD_DUET_CAP: stop after this
                                               // many confirmed notes (v1.4)
+    uint16_t onsets;                          // CMD_RHYTHM pattern (v1.8)
+    uint16_t beat_ms;                         // CMD_RHYTHM beat length
 } ear_job_t;
 
 #define CMD_QUIT 0
@@ -48,6 +51,7 @@ typedef struct {
 #define CMD_DUET_CAP 6
 #define CMD_DUET_PLAY 7
 #define CMD_MELODY 8
+#define CMD_RHYTHM 9
 #define CUE_MAX_NOTES 8
 
 // Worker state. s_task/s_stopped follow the demo_audio.c ownership pattern:
@@ -333,6 +337,45 @@ static void run_melody(const ear_job_t *job) {
     post_play_done();
 }
 
+// ---- rhythm (v1.8) ----
+// Click note: short high blip; amp separates accent (pattern onsets)
+// from soft (count-in and backing) ticks.
+#define RHY_TICK_MIDI 96
+#define RHY_TICK_MS 40
+static void run_rhythm(const ear_job_t *job) {
+    if (bsp_audio_set_format(EAR_TONE_SR, 16, 1) != ESP_OK) {
+        post_play_done();
+        return;
+    }
+    bsp_audio_set_volume(s_volume);
+    ear_audio_event_t start = { .kind = EAR_AUDIO_EV_PLAY_START };
+    xQueueSend(s_event_q, &start, 0);
+    uint16_t beat = job->beat_ms ? job->beat_ms : 600u;
+    // Bar 1: four count-in ticks.
+    for (int b = 0; b < 4 && !s_cancel; b++) {
+        play_note(RHY_TICK_MIDI, RHY_TICK_MS, 0.45f);
+        if (b < 3) play_gap(beat - RHY_TICK_MS);
+    }
+    // Bar 2: onsets as accent clicks, quarters as soft backing ticks so
+    // the tapper keeps the pulse while tapping. Streaming writes are the
+    // clock: each gap+click lands at its slot's real-time offset.
+    uint32_t pos = 0;
+    for (uint8_t slot = 0; slot < EAR_RHY_BAR_SLOTS && !s_cancel; slot++) {
+        uint32_t at = ear_rhythm_slot_ms(beat, slot);
+        bool onset = (job->onsets >> slot) & 1u;
+        bool backing = (slot % 4u) == 0u;
+        if (onset || backing) {
+            if (at > pos) play_gap((int)(at - pos));
+            play_note(RHY_TICK_MIDI, RHY_TICK_MS, onset ? 0.85f : 0.35f);
+            pos = at + RHY_TICK_MS;
+        }
+    }
+    if (!s_cancel && pos < (uint32_t)beat * 4u) {
+        play_gap((int)((uint32_t)beat * 4u - pos));   // fill to the bar end
+    }
+    post_play_done();
+}
+
 // Post PLAY_DONE to the app (unless the event queue is full - UI polls the
 // screen state, a dropped event would stall the flow, so this must send).
 static void post_play_done(void) {
@@ -387,6 +430,9 @@ static void audio_task(void *arg) {
             break;
         case CMD_MELODY:
             run_melody(&job);
+            break;
+        case CMD_RHYTHM:
+            run_rhythm(&job);
             break;
         case CMD_QUIT:
             xSemaphoreGive(s_stopped);
@@ -487,6 +533,12 @@ void ear_audio_dict_capture(uint8_t expect_notes) {
 
 const ear_duet_phrase_t *ear_audio_dict_phrase(void) {
     return &s_duet_phrase;
+}
+
+void ear_audio_play_rhythm(uint16_t onsets, uint16_t beat_ms) {
+    ear_job_t job = { .cmd = CMD_RHYTHM, .onsets = onsets,
+                      .beat_ms = beat_ms };
+    xQueueSend(s_job_q, &job, 0);
 }
 
 // Cancel must bypass the job queue: the worker is busy inside run_sing and

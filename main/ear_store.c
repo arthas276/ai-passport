@@ -2,6 +2,7 @@
 #include "ear_store.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include <string.h>
 
 static const char *NS = "earbuddy";
 
@@ -14,12 +15,15 @@ void ear_store_load(ear_save_t *out) {
     out->xp = 0;
     out->ilvl = out->clvl = out->slvl = 1;
     out->dlvl = 1;
+    out->rlvl = 1;
+    out->vlvl = 1;
     out->vol = 80;
     out->answered = 0;
     out->sing_pass = 0;
     out->duets = 0;
     out->best_combo = 0;
     out->melodies = 0;
+    memset(out->kind_miss, 0, sizeof(out->kind_miss));
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
         return;   // first boot or partition issue: fresh pet
@@ -32,12 +36,19 @@ void ear_store_load(ear_save_t *out) {
     if (nvs_get_u8(h, "clvl", &v) == ESP_OK) out->clvl = clamp_lvl(v);
     if (nvs_get_u8(h, "slvl", &v) == ESP_OK) out->slvl = clamp_lvl(v);
     if (nvs_get_u8(h, "dl", &v) == ESP_OK) out->dlvl = clamp_lvl(v);
+    if (nvs_get_u8(h, "rl", &v) == ESP_OK) out->rlvl = clamp_lvl(v);
+    if (nvs_get_u8(h, "vl", &v) == ESP_OK) out->vlvl = clamp_lvl(v);
     if (nvs_get_u8(h, "vol", &v) == ESP_OK && v <= 100) out->vol = v;
     if (nvs_get_u32(h, "ans", &cnt) == ESP_OK) out->answered = cnt;
     if (nvs_get_u32(h, "sng", &cnt) == ESP_OK) out->sing_pass = cnt;
     if (nvs_get_u32(h, "du", &cnt) == ESP_OK) out->duets = cnt;
     if (nvs_get_u32(h, "mel", &cnt) == ESP_OK) out->melodies = cnt;
     if (nvs_get_u8(h, "cmb", &v) == ESP_OK) out->best_combo = v;
+    size_t blob = 0;
+    if (nvs_get_blob(h, "km", NULL, &blob) == ESP_OK &&
+        blob == sizeof(out->kind_miss)) {
+        nvs_get_blob(h, "km", out->kind_miss, &blob);
+    }
     nvs_close(h);
 }
 
@@ -49,12 +60,15 @@ void ear_store_save(const ear_save_t *s) {
     nvs_set_u8(h, "clvl", s->clvl);
     nvs_set_u8(h, "slvl", s->slvl);
     nvs_set_u8(h, "dl", s->dlvl);
+    nvs_set_u8(h, "rl", s->rlvl);
+    nvs_set_u8(h, "vl", s->vlvl);
     nvs_set_u8(h, "vol", s->vol);
     nvs_set_u32(h, "ans", s->answered);
     nvs_set_u32(h, "sng", s->sing_pass);
     nvs_set_u32(h, "du", s->duets);
     nvs_set_u32(h, "mel", s->melodies);
     nvs_set_u8(h, "cmb", s->best_combo);
+    nvs_set_blob(h, "km", s->kind_miss, sizeof(s->kind_miss));
     nvs_commit(h);
     nvs_close(h);
 }

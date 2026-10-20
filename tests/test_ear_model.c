@@ -57,6 +57,31 @@ int main(void)
         assert(q.dir == EAR_DIR_UP);
     }
 
+    // Weakness weighting (v1.8): NULL reset keeps drawing valid questions;
+    // a heavily-missed kind is drawn far more often than the rest.
+    ear_model_set_miss(NULL);
+    ear_model_session_init(&s, EAR_MODE_INTERVAL, 2);
+    for (int i = 0; i < 100; i++) {
+        ear_model_next_question(&s, &q);
+        assert((uint8_t)q.answer < EAR_KIND_COUNT);
+    }
+    uint32_t miss[EAR_KIND_COUNT] = { 0 };
+    miss[EAR_KIND_MIN3] = 100;   // capped at +15 but still dominant
+    miss[EAR_KIND_P4] = 2;
+    ear_model_set_miss(miss);
+    ear_model_session_init(&s, EAR_MODE_INTERVAL, 2);
+    int n_min3 = 0, n_others = 0;
+    for (int i = 0; i < 1000; i++) {
+        ear_model_next_question(&s, &q);
+        if ((uint8_t)q.answer == EAR_KIND_MIN3) n_min3++; else n_others++;
+    }
+    // weights: min3 = 16, P4 = 3, others = 1 (4 options at L2). The
+    // anti-repeat rule caps min3 at ~every other question, so a decisive
+    // rise over the uniform 25% (without hitting pure alternation) passes.
+    assert(n_min3 > 350 && n_min3 < 560);
+    assert(n_others > 400);
+    ear_model_set_miss(NULL);
+
         // Grading: correct choice advances score/combo; wrong resets combo only.
     ear_model_session_init(&s, EAR_MODE_CHORD, 2);
     ear_model_next_question(&s, &q);

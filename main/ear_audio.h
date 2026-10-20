@@ -9,6 +9,7 @@
 // Events posted to the app queue by the worker.
 typedef enum {
     EAR_AUDIO_EV_PLAY_DONE = 0,
+    EAR_AUDIO_EV_PLAY_START,    // rhythm bar starts: timestamp taps from here
     EAR_AUDIO_EV_PITCH,      // live frame: hz/conf/cents valid
     EAR_AUDIO_EV_SING_PASS,
     EAR_AUDIO_EV_SING_FAIL,
@@ -64,3 +65,10 @@ void ear_audio_play_melody(const uint8_t *notes, uint8_t count,
 // thinking pause instead of stopping on the first 0.8 s of silence.
 void ear_audio_dict_capture(uint8_t expect_notes);
 const ear_duet_phrase_t *ear_audio_dict_phrase(void);
+
+// ---- rhythm mode (v1.8, PRD 3.6) ----
+// Play one rhythm pattern: bar 1 = four count-in ticks, bar 2 = the
+// pattern onsets (accent clicks) over soft quarter-note backing ticks.
+// EV_PLAY_START posts right before the first sample so the UI can
+// timestamp button taps; EV_PLAY_DONE ends exactly at the bar-2 end.
+void ear_audio_play_rhythm(uint16_t onsets, uint16_t beat_ms);
