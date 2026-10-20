@@ -4,6 +4,7 @@
 #include "ear_assets.h"
 #include "ear_duet.h"
 #include "ear_dictation.h"
+#include "ear_vs.h"
 #include "ear_store.h"
 #include "bsp_display.h"
 #include "bsp_battery.h"
@@ -46,6 +47,8 @@ static ear_question_t s_q;
 static bool s_awaiting_answer;   // options active, waiting for OK
 static bool s_advancing;         // next PLAY_DONE advances the question
 static uint32_t s_sess_xp;       // XP gained this session (RESULT page)
+static bool s_vs;                // quiz screen is a VS BATTLE match (v1.7)
+static ear_vs_t s_vsst;          // VS turn/score state for the match
 
 // ---- home mode card (includes SETUP as 4th entry) ----
 static uint8_t s_mode_card;
@@ -116,6 +119,7 @@ static void note_activity(void) {
 
 // ---- forward declarations (later screens referenced earlier) ----
 static void enter_result(void);
+static void enter_vs_result(void);
 static void enter_result_common(uint8_t score, uint8_t total, uint32_t xp);
 static void grade_answer(void);
 static void enter_sing(void);
@@ -125,10 +129,10 @@ static void enter_setup(void);
 
 // ---- HOME ----
 // Mode card names (index = s_mode_card: 0 INTERVAL 1 CHORD 2 SING 3 DUET
-// 4 DICTATION 5 SETUP).
-static const char *MODE_NAMES[6] = {
+// 4 DICTATION 5 VS 6 SETUP).
+static const char *MODE_NAMES[7] = {
     "MODE: INTERVAL", "MODE: CHORD", "MODE: SING", "MODE: DUET",
-    "MODE: DICTATION",
+    "MODE: DICTATION", "MODE: VS BATTLE",
     "MODE: SETUP",
 };
 
@@ -166,6 +170,7 @@ static void home_refresh(void) {
 static void enter_home(void) {
     if (h_scr) { lv_obj_delete(h_scr); h_scr = NULL; }
     s_scr = SCR_HOME;
+    s_vs = false;                   // any HOME entry ends a VS match (v1.7)
     h_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(h_scr, lv_color_hex(C_BG), 0);
 
@@ -238,6 +243,26 @@ static void quiz_grid_build(void) {
     }
 }
 
+// Quiz header: "Q n/10 LVx" solo; VS adds the answering player and the
+// running score (v1.7).
+static void quiz_refresh_hdr(void) {
+    char hdr[48];
+    if (s_vs) {
+        snprintf(hdr, sizeof(hdr), "Q %u/%u P%u %u:%u",
+                 (unsigned)(s_vsst.index + 1u),
+                 (unsigned)EAR_VS_QUESTIONS,
+                 (unsigned)(ear_vs_player(&s_vsst) + 1u),
+                 (unsigned)s_vsst.p1_score, (unsigned)s_vsst.p2_score);
+        lbl(q_hdr, hdr, C_GOLD);
+    } else {
+        snprintf(hdr, sizeof(hdr), "Q %u/%u LV%u",
+                 (unsigned)(s_sess.index + 1),
+                 (unsigned)EAR_QUESTIONS_PER_SESSION,
+                 (unsigned)s_sess.level);
+        lbl(q_hdr, hdr, C_MUTED);
+    }
+}
+
 // Load the next question: state, labels, grid, and start playback.
 static void quiz_load_question(void) {
     ear_model_next_question(&s_sess, &s_q);
@@ -250,11 +275,7 @@ static void quiz_load_question(void) {
     for (uint8_t i = 0; i < n; i++) {
         lbl(q_cells_lbl[i], EAR_KINDS[s_q.options[i]].label, C_TEXT);
     }
-    char hdr[48];
-    snprintf(hdr, sizeof(hdr), "Q %u/%u LV%u",
-             (unsigned)(s_sess.index + 1),
-             (unsigned)EAR_QUESTIONS_PER_SESSION, (unsigned)s_sess.level);
-    lbl(q_hdr, hdr, C_MUTED);
+    quiz_refresh_hdr();
     lbl(q_status, "LISTEN...", C_CYAN);
     ear_audio_play_question(s_q.root, s_q.answer, s_q.dir);
 }
@@ -264,6 +285,7 @@ static void enter_quiz(ear_mode_t mode) {
     uint8_t lvl = (mode == EAR_MODE_INTERVAL) ? s_save.ilvl : s_save.clvl;
     ear_model_session_init(&s_sess, mode, lvl);
     s_sess_xp = 0;
+    s_vs = false;                   // solo entry; enter_vs() re-arms the flag
     if (q_scr) { lv_obj_delete(q_scr); q_scr = NULL; }
     s_scr = SCR_QUIZ;
     q_scr = lv_obj_create(NULL);
@@ -310,9 +332,28 @@ static void enter_quiz(ear_mode_t mode) {
     quiz_load_question();
 }
 
-// Advance to the next question or the RESULT page.
+// ---- VS BATTLE (v1.7) ----
+// One device, two players: 10 interval questions alternate P1/P2 at the
+// current interval level. Every correct answer feeds the shared pet +1 XP;
+// no perfect bonus and no level adjustment - levels stay solo-driven.
+static void enter_vs(void) {
+    enter_quiz(EAR_MODE_INTERVAL);   // builds the screen, resets s_vs, Q1
+    ear_vs_begin(&s_vsst, EAR_MODE_INTERVAL, s_save.ilvl);
+    s_vs = true;
+    quiz_refresh_hdr();              // retitle Q1 with the P1 turn header
+}
+
+// Advance to the next question or the result page (VS: its own verdict).
 static void quiz_advance(void) {
     s_sess.index++;
+    if (s_vs) {
+        if (ear_vs_done(&s_vsst)) {
+            enter_vs_result();
+            return;
+        }
+        quiz_load_question();
+        return;
+    }
     if (s_sess.index >= EAR_QUESTIONS_PER_SESSION) {
         enter_result();
         return;
@@ -351,10 +392,11 @@ static void quiz_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 static void grade_answer(void) {
     s_awaiting_answer = false;
     bool correct = ear_model_grade(&s_sess, &s_q, s_cursor);
+    if (s_vs) ear_vs_record(&s_vsst, correct);   // v1.7 VS scoring
     if (correct) {
         s_save.answered++;            // lifetime stats (v1.2)
-        if (s_sess.combo > s_save.best_combo) {
-            s_save.best_combo = s_sess.combo;
+        if (!s_vs && s_sess.combo > s_save.best_combo) {
+            s_save.best_combo = s_sess.combo;   // combo stays a solo stat
         }
         award_xp(EAR_XP_CORRECT);
         s_sess_xp += EAR_XP_CORRECT;
@@ -1039,6 +1081,36 @@ static void dict_audio_ev(ear_audio_event_t *ev) {
 }
 
 // ---- RESULT ----
+// VS match end: verdict + final score + the XP the shared pet earned.
+static void enter_vs_result(void) {
+    s_vs = false;
+    int8_t w = ear_vs_winner(&s_vsst);
+    if (r_scr) { lv_obj_delete(r_scr); r_scr = NULL; }
+    s_scr = SCR_RESULT;              // result_key: any OK returns HOME
+    r_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(r_scr, lv_color_hex(C_BG), 0);
+
+    r_score = lv_label_create(r_scr);
+    lv_obj_set_style_text_font(r_score, &lv_font_montserrat_20, 0);
+    lv_obj_align(r_score, LV_ALIGN_TOP_MID, 0, 80);
+    r_xp = lv_label_create(r_scr);
+    lv_obj_set_style_text_font(r_xp, &lv_font_montserrat_14, 0);
+    lv_obj_align(r_xp, LV_ALIGN_TOP_MID, 0, 120);
+    r_tot = lv_label_create(r_scr);
+    lv_obj_set_style_text_font(r_tot, &lv_font_montserrat_14, 0);
+    lv_obj_align(r_tot, LV_ALIGN_TOP_MID, 0, 150);
+
+    lbl(r_score, w < 0 ? "DRAW!" : (w == 0 ? "P1 WINS!" : "P2 WINS!"),
+        C_GOLD);
+    char t[48];
+    snprintf(t, sizeof(t), "P1 %u : %u P2",
+             (unsigned)s_vsst.p1_score, (unsigned)s_vsst.p2_score);
+    lbl(r_xp, t, C_TEXT);
+    snprintf(t, sizeof(t), "+%lu XP", (unsigned long)s_sess_xp);
+    lbl(r_tot, t, C_GOLD);
+    lv_screen_load(r_scr);
+}
+
 // Quiz session end: perfect bonus + auto level adjust, then the shared
 // result page. Sing sessions call enter_result_common directly (v1.2).
 static void enter_result(void) {
@@ -1229,10 +1301,10 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     case SCR_HOME:
         if (ev != BSP_BTN_CLICK) return;
         if (btn == BSP_BTN_UP) {
-            s_mode_card = (uint8_t)((s_mode_card + 5) % 6);
+            s_mode_card = (uint8_t)((s_mode_card + 6) % 7);
             home_refresh();
         } else if (btn == BSP_BTN_DOWN) {
-            s_mode_card = (uint8_t)((s_mode_card + 1) % 6);
+            s_mode_card = (uint8_t)((s_mode_card + 1) % 7);
             home_refresh();
         } else if (btn == BSP_BTN_OK) {
             if (s_mode_card == 0) enter_quiz(EAR_MODE_INTERVAL);
@@ -1240,6 +1312,7 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             else if (s_mode_card == 2) enter_sing();
             else if (s_mode_card == 3) enter_duet();
             else if (s_mode_card == 4) enter_dictation();
+            else if (s_mode_card == 5) enter_vs();
             else enter_setup();
         }
         break;

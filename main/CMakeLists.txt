@@ -5,6 +5,7 @@ idf_component_register(
          "ear_pitch.c"
          "ear_duet.c"
          "ear_dictation.c"
+         "ear_vs.c"
          "ear_tone.c"
          "ear_assets.c"
          "ear_store.c"
