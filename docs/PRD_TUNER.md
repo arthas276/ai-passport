@@ -5,7 +5,7 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/tuner (from upstream main)
-> PRD version: v1.1 (2026-10-11: GUITAR/UKULELE/VIOLIN string modes with lock-to-next-string, VOICE mode with session range, OK-long mode cycling; v1.0 chromatic core)
+> PRD version: v1.2 (2026-10-21: hold UP in instrument modes plays the current target string's reference tone ~1.2 s, capture pauses while it plays; v1.1 2026-10-11: GUITAR/UKULELE/VIOLIN string modes with lock-to-next-string, VOICE mode with session range, OK-long mode cycling; v1.0 chromatic core)
 > Date: 2026-10-11
 > Mode: user-authorized autonomous build; pitch detector ported from
 > feature/ear-buddy ear_pitch.c (same repository, device-proven 2026-09-29).
@@ -44,7 +44,7 @@ holding OK: CHROMATIC (default), GUITAR (E2 A2 D3 G3 B3 E4), UKULELE
   instrument modes then auto-advance to the next string (wraparound)
 - OK click freezes/resumes the readout (label shows FROZEN); OK long cycles
   the mode (resets strings/range); UP/DOWN steps the target string in
-  instrument modes; any key wakes the backlight; 10 s idle dims to 30%
+  instrument modes (hold UP plays the current target string's reference tone, ~1.2 s, capture pauses while it plays); any key wakes the backlight; 10 s idle dims to 30%
   (repo power convention)
 
 ## 4. Technical Architecture
