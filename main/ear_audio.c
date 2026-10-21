@@ -349,13 +349,18 @@ static void run_rhythm(const ear_job_t *job) {
     }
     bsp_audio_set_volume(s_volume);
     ear_audio_event_t start = { .kind = EAR_AUDIO_EV_PLAY_START };
-    xQueueSend(s_event_q, &start, 0);
     uint16_t beat = job->beat_ms ? job->beat_ms : 600u;
-    // Bar 1: four count-in ticks.
+    // Bar 1: four count-in ticks, each followed by its beat's remaining
+    // silence so the pattern downbeat lands on the next grid beat (4*beat)
+    // - one clear beat of separation after the last count-in tick.
     for (int b = 0; b < 4 && !s_cancel; b++) {
         play_note(RHY_TICK_MIDI, RHY_TICK_MS, 0.45f);
-        if (b < 3) play_gap(beat - RHY_TICK_MS);
+        play_gap(beat - RHY_TICK_MS);
     }
+    // The pattern bar starts here: PLAY_START is the tap-time origin (the
+    // UI switches to TAP on it), so it fires at this bar's first sample,
+    // after the count-in, not before bar 1.
+    if (!s_cancel) xQueueSend(s_event_q, &start, 0);
     // Bar 2: onsets as accent clicks, quarters as soft backing ticks so
     // the tapper keeps the pulse while tapping. Streaming writes are the
     // clock: each gap+click lands at its slot's real-time offset.
