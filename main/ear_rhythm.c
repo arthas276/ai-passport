@@ -126,3 +126,26 @@ uint8_t ear_rhythm_grade(const ear_rhythm_pattern_t *p, uint16_t beat_ms,
     }
     return matched;
 }
+
+// Live verdict for one tap, mirroring ear_rhythm_grade's greedy match:
+// walk onsets from the cursor; a tap more than tol before an onset is a
+// dead extra (EARLY), a tap inside a window consumes that onset (HIT),
+// and a tap past all remaining windows is LATE. Replay a tap stream
+// through one cursor and the HIT count equals grade's matched count.
+ear_rhythm_tap_verdict_t ear_rhythm_tap_verdict(const ear_rhythm_pattern_t *p,
+        uint16_t beat_ms, uint32_t tap_ms, ear_rhythm_tap_cursor_t *cur,
+        int32_t *delta_ms) {
+    uint32_t tol = tolerance_ms(beat_ms);
+    for (uint8_t slot = cur->next_slot; slot < EAR_RHY_BAR_SLOTS; slot++) {
+        if (!(p->onsets & (1u << slot))) continue;
+        uint32_t target = ear_rhythm_slot_ms(beat_ms, slot);
+        if (tap_ms + tol < target) return EAR_RHY_TAP_EARLY;
+        if (tap_ms <= target + tol) {
+            cur->next_slot = (uint8_t)(slot + 1u);
+            if (delta_ms) *delta_ms = (int32_t)tap_ms - (int32_t)target;
+            return EAR_RHY_TAP_HIT;
+        }
+        // Past this onset's window: the onset is missed, keep walking.
+    }
+    return EAR_RHY_TAP_LATE;
+}

@@ -62,6 +62,8 @@ static ear_rhythm_pattern_t s_rh_pat;
 static uint32_t s_rh_t0;                     // PLAY_START timestamp (ms)
 static uint32_t s_rh_taps[EAR_RHY_TAPS_MAX];
 static uint8_t s_rh_tap_count;
+static ear_rhythm_tap_cursor_t s_rh_vcur;       // live verdict cursor
+static char s_rh_fb[EAR_RHY_TAPS_MAX * 14 + 1]; // verdict glyph row
 static bool s_rh_advancing;                  // grade cue done -> next
 
 // ---- SIGHTSING flow state (v1.8) ----
@@ -1115,8 +1117,10 @@ static void dict_audio_ev(ear_audio_event_t *ev) {
 // ---- RHYTHM (v1.8, PRD 3.6) ----
 // Four states on one screen: READY -> PLAY (count-in + pattern) -> TAP
 // (backing ticks, OK records a tap) -> GRADE; ten patterns per session.
-// Tap timestamps run from the PLAY_START event; PLAY_DONE lands exactly at
-// the tap-bar end and triggers grading, then the grade cue advances.
+// Each OK tap gets an immediate verdict glyph (ok green / early gold /
+// late red) with the same greedy matching as the final grade. PLAY_START
+// fires at the pattern-bar start (after the count-in); PLAY_DONE lands
+// exactly at the tap-bar end and triggers grading, then the cue advances.
 static void rh_refresh_ready(void) {
     s_rh_state = RH_READY;
     char p[48];
@@ -1131,6 +1135,8 @@ static void rh_refresh_ready(void) {
 static void rh_start_play(void) {
     s_rh_state = RH_PLAY;
     s_rh_tap_count = 0;
+    s_rh_vcur.next_slot = 0;
+    s_rh_fb[0] = '\0';
     lbl(rh_status, "COUNT IN...", C_CYAN);
     lbl(rh_hint, "OKL EXIT", C_MUTED);
     ear_audio_play_rhythm(s_rh_pat.onsets,
@@ -1199,6 +1205,7 @@ static void enter_rhythm(void) {
 
     rh_taps_lbl = lv_label_create(rh_scr);
     lv_obj_set_style_text_font(rh_taps_lbl, &lv_font_montserrat_14, 0);
+    lv_label_set_recolor(rh_taps_lbl, true);   // per-tap verdict colors
     lv_obj_align(rh_taps_lbl, LV_ALIGN_TOP_MID, 0, 165);
 
     rh_hint = lv_label_create(rh_scr);
@@ -1229,11 +1236,21 @@ static void rh_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             rh_start_play();
         } else if (s_rh_state == RH_TAP &&
                    s_rh_tap_count < EAR_RHY_TAPS_MAX) {
-            s_rh_taps[s_rh_tap_count++] =
-                (uint32_t)(esp_timer_get_time() / 1000) - s_rh_t0;
-            char t[24];
-            snprintf(t, sizeof(t), "TAP %u", (unsigned)s_rh_tap_count);
-            lbl(rh_taps_lbl, t, C_CYAN);
+            uint32_t t = (uint32_t)(esp_timer_get_time() / 1000) - s_rh_t0;
+            s_rh_taps[s_rh_tap_count++] = t;
+            // Immediate verdict glyph, same matching order as the grade.
+            ear_rhythm_tap_verdict_t v = ear_rhythm_tap_verdict(
+                &s_rh_pat, EAR_RHY_BEAT_MS[s_rhy.level - 1], t,
+                &s_rh_vcur, NULL);
+            const char *sym = (v == EAR_RHY_TAP_HIT) ? LV_SYMBOL_OK
+                            : (v == EAR_RHY_TAP_EARLY) ? LV_SYMBOL_LEFT
+                                                       : LV_SYMBOL_RIGHT;
+            uint32_t col = (v == EAR_RHY_TAP_HIT) ? C_OK
+                         : (v == EAR_RHY_TAP_EARLY) ? C_GOLD : C_BAD;
+            size_t len = strlen(s_rh_fb);
+            snprintf(s_rh_fb + len, sizeof(s_rh_fb) - len, "#%06lX %s# ",
+                     (unsigned long)col, sym);
+            lbl(rh_taps_lbl, s_rh_fb, C_TEXT);
         } else if (s_rh_state == RH_GRADE) {
             rh_next();   // skip the cue wait
         }

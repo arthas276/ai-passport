@@ -79,6 +79,51 @@ int main(void)
     hits = ear_rhythm_grade(&p, 600, taps, 5, &perfect);
     assert(hits == 4 && !perfect);
 
+    // Live verdict classification at 600 ms beat (tol = 200).
+    ear_rhythm_tap_cursor_t cur = { .next_slot = 0 };
+    int32_t d = 0;
+    assert(ear_rhythm_tap_verdict(&p, 600, 5, &cur, &d) == EAR_RHY_TAP_HIT
+           && d == 5);
+    assert(ear_rhythm_tap_verdict(&p, 600, 300, &cur, &d) == EAR_RHY_TAP_EARLY);
+    assert(ear_rhythm_tap_verdict(&p, 600, 620, &cur, &d) == EAR_RHY_TAP_HIT
+           && d == 20);
+    assert(ear_rhythm_tap_verdict(&p, 600, 2500, &cur, &d) == EAR_RHY_TAP_LATE);
+    assert(ear_rhythm_tap_verdict(&p, 600, 1190, &cur, &d) == EAR_RHY_TAP_HIT
+           && d == -10);
+
+    // Grader agreement: replaying the same taps through a cursor yields
+    // exactly ear_rhythm_grade's matched count, across levels and random
+    // ordered tap streams.
+    uint32_t rs = 7u;
+    for (int iter = 0; iter < 300; iter++) {
+        rs = rs * 1664525u + 1013904223u;
+        uint8_t lvl = (uint8_t)(1u + rs % 3u);
+        ear_rhythm_session_t rsess;
+        ear_rhythm_session_init(&rsess, lvl, rs);
+        ear_rhythm_pattern_t rp;
+        ear_rhythm_next_pattern(&rsess, &rp);
+        uint16_t beat = EAR_RHY_BEAT_MS[lvl - 1];
+        rs = rs * 1664525u + 1013904223u;
+        uint8_t ntaps = (uint8_t)(1u + rs % EAR_RHY_TAPS_MAX);
+        uint32_t rtaps[EAR_RHY_TAPS_MAX];
+        uint32_t t = 0;
+        for (uint8_t k = 0; k < ntaps; k++) {
+            rs = rs * 1664525u + 1013904223u;
+            t += rs % 350u;                    // ordered, sometimes equal
+            rtaps[k] = t;
+        }
+        bool rperfect = false;
+        uint8_t matched = ear_rhythm_grade(&rp, beat, rtaps, ntaps, &rperfect);
+        ear_rhythm_tap_cursor_t rcur = { .next_slot = 0 };
+        uint8_t vhits = 0;
+        for (uint8_t k = 0; k < ntaps; k++) {
+            if (ear_rhythm_tap_verdict(&rp, beat, rtaps[k], &rcur, NULL)
+                    == EAR_RHY_TAP_HIT) vhits++;
+        }
+        assert(vhits == matched);
+    }
+
     printf("rhythm: generation + slot math + grading windows ok\n");
+    printf("rhythm: live tap verdict + grader agreement ok\n");
     return 0;
 }

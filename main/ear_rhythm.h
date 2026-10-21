@@ -47,3 +47,22 @@ uint32_t ear_rhythm_slot_ms(uint16_t beat_ms, uint8_t slot);
 uint8_t ear_rhythm_grade(const ear_rhythm_pattern_t *p, uint16_t beat_ms,
                          const uint32_t *tap_ms, uint8_t tap_count,
                          bool *perfect);
+
+// Live tap verdict (v1.8 feedback): classify taps as they arrive using
+// the SAME greedy assignment ear_rhythm_grade applies at the bar end, so
+// the on-screen symbol always agrees with the final grade. Feed taps in
+// arrival order through one cursor per pattern; EARLY/LATE taps are the
+// grader's extras. delta_ms (optional) = tap - matched onset time.
+typedef enum {
+    EAR_RHY_TAP_EARLY = 0,   // tap died before the next onset's window
+    EAR_RHY_TAP_HIT,         // matched an onset (consumes it)
+    EAR_RHY_TAP_LATE,        // past every remaining onset's window
+} ear_rhythm_tap_verdict_t;
+
+typedef struct {
+    uint8_t next_slot;       // first onset slot not yet consumed by a HIT
+} ear_rhythm_tap_cursor_t;
+
+ear_rhythm_tap_verdict_t ear_rhythm_tap_verdict(const ear_rhythm_pattern_t *p,
+        uint16_t beat_ms, uint32_t tap_ms, ear_rhythm_tap_cursor_t *cur,
+        int32_t *delta_ms);
