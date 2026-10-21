@@ -191,9 +191,12 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
 - Session: 10 patterns, auto level adjust on rlvl; beat per level
   700/600/500 ms; UP long replays the same pattern; OK long quits
   (earned XP stays)
-- Timing: the worker posts PLAY_START right before the first sample,
-  taps are timestamped from it, and PLAY_DONE lands exactly at the
-  tap-bar end, which triggers grading
+- Live tap feedback: each OK tap immediately shows a verdict glyph with
+  the same matching order as the final grade - check (green) on the
+  beat, left chevron (gold) early, right chevron (red) late
+- Timing: the worker posts PLAY_START at the pattern-bar start (after
+  the count-in), taps are timestamped from it, and PLAY_DONE lands
+  exactly at the tap-bar end, which triggers grading
 
 ### 3.7 Sightsing mode (v1.8)
 
