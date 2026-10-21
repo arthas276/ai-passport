@@ -24,3 +24,8 @@ esp_err_t tuner_audio_init(QueueHandle_t event_q);
 
 // Play the lock chime (queues; capture pauses until TUNER_EV_CUE_DONE).
 void tuner_audio_cue(void);
+
+// Play a sustained reference tone for a note (queues; capture pauses
+// until the next TUNER_EV_CUE_DONE). v1.2: instrument modes hold UP to
+// hear the current target string.
+void tuner_audio_tone(int16_t midi, uint16_t ms);

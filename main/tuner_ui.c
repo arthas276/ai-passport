@@ -1,7 +1,7 @@
 // tuner_ui.c - single-screen tuner UI with instrument modes. All handlers
 // run under bsp_lvgl_lock (called from the input task in main.c).
 // Keys: OK click = freeze/resume; OK long = cycle mode; UP/DOWN = step the
-// target string in instrument modes.
+// target string in instrument modes; UP long = reference tone (v1.2).
 #include "tuner_ui.h"
 #include "tuner.h"
 #include "tuner_audio.h"
@@ -70,6 +70,18 @@ static void set_status(const char *text, uint32_t color) {
     lv_obj_set_style_text_color(s_status, lv_color_hex(color), 0);
 }
 
+// Hint line reflects the freeze state and whether the mode has strings
+// (instrument modes advertise hold-UP reference tones).
+static void set_hint(void) {
+    lv_label_set_text(s_hint,
+        s_frozen ? "FROZEN - OK RESUME"
+                 : (tuner_mode_string_count(s_mode) > 0)
+                     ? "UPL REF  OK FREEZE  OKL MODE"
+                     : "OK FREEZE  OKL MODE");
+    lv_obj_set_style_text_color(s_hint,
+        lv_color_hex(s_frozen ? C_CYAN : C_MUTED), 0);
+}
+
 static void set_marker(float cents) {
     int x = CENTER_X + (int)(cents * (float)PX_PER_CENT);
     if (x < 0) x = 0;
@@ -103,6 +115,7 @@ static void refresh_mode_ui(void) {
     } else {
         lv_label_set_text(s_aux, "");
     }
+    set_hint();
 }
 
 // Build the one and only screen.
@@ -173,7 +186,6 @@ void tuner_ui_init(QueueHandle_t app_q) {
     lv_obj_set_style_text_font(s_hint, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_hint, lv_color_hex(C_MUTED), 0);
     lv_obj_align(s_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
-    lv_label_set_text(s_hint, "OK FREEZE  OKL MODE");
 
     lv_screen_load(s_scr);
     refresh_mode_ui();
@@ -198,13 +210,19 @@ void tuner_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         s_frozen = false;
         s_lock_cnt = 0;
         s_lock_armed = true;
-        lv_label_set_text(s_hint, "OK FREEZE  OKL MODE");
-        lv_obj_set_style_text_color(s_hint, lv_color_hex(C_MUTED), 0);
         lv_label_set_text(s_note, "--");
         lv_label_set_text(s_hz, "-- Hz");
         set_status("", C_TEXT);
         set_marker(0.0f);
         refresh_mode_ui();
+        return;
+    }
+    // Hold UP in instrument modes: play the current target string (v1.2).
+    if (ev == BSP_BTN_LONG && btn == BSP_BTN_UP) {
+        if (tuner_mode_string_count(s_mode) > 0) {
+            tuner_audio_tone(tuner_mode_string_midi(s_mode, s_strings.index),
+                             1200);
+        }
         return;
     }
     if (ev != BSP_BTN_CLICK) return;
@@ -224,10 +242,7 @@ void tuner_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         }
     } else if (btn == BSP_BTN_OK) {
         s_frozen = !s_frozen;
-        lv_label_set_text(s_hint,
-                          s_frozen ? "FROZEN - OK RESUME" : "OK FREEZE  OKL MODE");
-        lv_obj_set_style_text_color(s_hint,
-            lv_color_hex(s_frozen ? C_CYAN : C_MUTED), 0);
+        set_hint();
     }
 }
 

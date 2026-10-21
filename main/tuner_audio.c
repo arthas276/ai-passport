@@ -13,36 +13,48 @@ static const char *TAG = "tuner_audio";
 #define CHUNK 512
 #define CUE_NOTE_MS 120
 
-typedef struct { int cmd; } tuner_job_t;   // CMD_CUE only; capture is default
+typedef struct { int cmd; int16_t midi; uint16_t ms; } tuner_job_t;
 #define CMD_CUE 1
+#define CMD_TONE 2
 
 static QueueHandle_t s_job_q;
 static QueueHandle_t s_event_q;
 static TaskHandle_t s_task;
 
-// Render the lock chime: two quick rising notes (E5 -> A5).
-static void play_cue(void) {
-    static const int16_t notes[] = { 76, 81 };   // MIDI E5, A5
+// Render one triangle-wave note (integer synth: audible on the tiny
+// speaker, no float/FPU cost on the ESP32-C3). amp scales the ±512
+// triangle; 24 matches the original chime level.
+static void play_note_midi(int16_t midi, uint16_t ms, int amp) {
+    float hz = tuner_note_freq(midi);
+    int32_t step = (int32_t)(hz * 1024.0f / TUNER_PITCH_SR);
+    int32_t phase = 0;
     static int16_t buf[CHUNK];
-    for (int k = 0; k < 2; k++) {
-        float hz = tuner_note_freq(notes[k]);
-        int32_t step = (int32_t)(hz * 1024.0f / TUNER_PITCH_SR);
-        int32_t phase = 0;
-        int left = TUNER_PITCH_SR * CUE_NOTE_MS / 1000u;
-        while (left > 0) {
-            int n = left < CHUNK ? left : CHUNK;
-            for (int i = 0; i < n; i++) {
-                // Integer triangle wave: audible on the tiny speaker,
-                // no float/FPU cost on the ESP32-C3.
-                int32_t ph = (phase >> 10) & 1023;
-                int32_t tri = ph < 512 ? ph * 2 - 512 : 1536 - ph * 2;
-                buf[i] = (int16_t)(tri * 24);
-                phase += step;
-            }
-            if (bsp_audio_write(buf, n * 2) != ESP_OK) return;
-            left -= n;
+    int left = TUNER_PITCH_SR * ms / 1000u;
+    while (left > 0) {
+        int n = left < CHUNK ? left : CHUNK;
+        for (int i = 0; i < n; i++) {
+            int32_t ph = (phase >> 10) & 1023;
+            int32_t tri = ph < 512 ? ph * 2 - 512 : 1536 - ph * 2;
+            buf[i] = (int16_t)(tri * amp);
+            phase += step;
         }
+        if (bsp_audio_write(buf, n * 2) != ESP_OK) return;
+        left -= n;
     }
+}
+
+// The lock chime: two quick rising notes (E5 -> A5).
+static void play_cue(void) {
+    play_note_midi(76, CUE_NOTE_MS, 24);
+    play_note_midi(81, CUE_NOTE_MS, 24);
+    tuner_event_t ev = { .kind = TUNER_EV_CUE_DONE };
+    xQueueSend(s_event_q, &ev, 0);
+}
+
+// Sustained reference tone for the target string (v1.2).
+static void play_tone(const tuner_job_t *job) {
+    if (job->midi < 0) return;
+    play_note_midi(job->midi, job->ms, 24);
     tuner_event_t ev = { .kind = TUNER_EV_CUE_DONE };
     xQueueSend(s_event_q, &ev, 0);
 }
@@ -73,9 +85,10 @@ static void audio_task(void *arg) {
     (void)arg;
     for (;;) {
         tuner_job_t job;
-        if (xQueueReceive(s_job_q, &job, 0) == pdTRUE && job.cmd == CMD_CUE) {
-            play_cue();
-            continue;   // drain any queued cue before resuming capture
+        if (xQueueReceive(s_job_q, &job, 0) == pdTRUE) {
+            if (job.cmd == CMD_CUE) play_cue();
+            else if (job.cmd == CMD_TONE) play_tone(&job);
+            continue;   // drain queued jobs before resuming capture
         }
         if (!capture_frame()) {
             ESP_LOGW(TAG, "capture read failed; retrying");
@@ -108,6 +121,11 @@ esp_err_t tuner_audio_init(QueueHandle_t event_q) {
 }
 
 void tuner_audio_cue(void) {
-    tuner_job_t job = { .cmd = CMD_CUE };
+    tuner_job_t job = { .cmd = CMD_CUE, .midi = 0, .ms = 0 };
+    xQueueSend(s_job_q, &job, 0);   // drop when busy: capture is the priority
+}
+
+void tuner_audio_tone(int16_t midi, uint16_t ms) {
+    tuner_job_t job = { .cmd = CMD_TONE, .midi = midi, .ms = ms };
     xQueueSend(s_job_q, &job, 0);   // drop when busy: capture is the priority
 }
