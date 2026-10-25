@@ -1,0 +1,173 @@
+// cheer_cards.c - praise-card library + shuffled-bag engine. PURE C.
+//
+// The card texts below are the single source of truth for the CJK font
+// subset: tools/gen_cheer_font.mjs collects every unique character of
+// CHEER_CARDS[] and generates main/cheer_font.c from exactly that set.
+// Voice: specific, deadpan-warm, lightly teasing - no hollow pep talk.
+#include <stdbool.h>
+
+#include "cheer_cards.h"
+
+const cheer_card_t CHEER_CARDS[] = {
+    // ---- DAILY ----
+    { "按时吃了三顿饭，这事你干得不错", CHEER_GRP_DAILY },
+    { "今天没对任何人发火，记一笔", CHEER_GRP_DAILY },
+    { "把外卖吃出堂食的认真，是种能力", CHEER_GRP_DAILY },
+    { "收拾桌子的样子，像在给明天递台阶", CHEER_GRP_DAILY },
+    { "洗完澡才躺下的夜晚，是加分项", CHEER_GRP_DAILY },
+    { "垃圾是今天倒的吧，我看见了", CHEER_GRP_DAILY },
+    { "你走路带风，风都让了你三次", CHEER_GRP_DAILY },
+    { "今天的你，电量比手机耐用", CHEER_GRP_DAILY },
+    { "少喝的那杯奶茶，身体悄悄记下了", CHEER_GRP_DAILY },
+    { "哼歌跑调，但心情是真的", CHEER_GRP_DAILY },
+    { "早起了十分钟，全天都赚了", CHEER_GRP_DAILY },
+    { "今天的黑眼圈，是昨晚认真的勋章", CHEER_GRP_DAILY },
+    { "你挑的水果，就没有不甜的", CHEER_GRP_DAILY },
+    { "下雨天带了伞，这叫远见", CHEER_GRP_DAILY },
+    { "今天笑的次数，超出平均值了", CHEER_GRP_DAILY },
+    { "阳台那盆花，还好有你", CHEER_GRP_DAILY },
+    { "杯子里的半杯水，明天也能喝完", CHEER_GRP_DAILY },
+    { "袜子配了对，秩序感回来了", CHEER_GRP_DAILY },
+    { "今天没熬夜，身体记住了", CHEER_GRP_DAILY },
+    { "便利店关东煮，因你多卖了串", CHEER_GRP_DAILY },
+    { "坐姿端正了三分钟，腰很感动", CHEER_GRP_DAILY },
+    // ---- WORK ----
+    { "会上没人接的话，你接了", CHEER_GRP_WORK },
+    { "周报写得不虚，这是稀缺品质", CHEER_GRP_WORK },
+    { "改到第三版还没骂人，修养在线", CHEER_GRP_WORK },
+    { "那个没人想碰的坑，你填了", CHEER_GRP_WORK },
+    { "摸鱼归来还能满血，这叫弹性", CHEER_GRP_WORK },
+    { "回消息像在救火，这叫可靠", CHEER_GRP_WORK },
+    { "今天干的活，对得起工资条", CHEER_GRP_WORK },
+    { "老板没看见的活，我替他看见了", CHEER_GRP_WORK },
+    { "把烂需求聊成了人话，专业", CHEER_GRP_WORK },
+    { "下班的瞬间，你比谁都体面", CHEER_GRP_WORK },
+    { "工位再乱，你一秒就能找到笔", CHEER_GRP_WORK },
+    { "你提的那句风险，后来应验了", CHEER_GRP_WORK },
+    { "会议缩短十分钟，有你的功劳", CHEER_GRP_WORK },
+    { "你没甩锅，锅自己碎了", CHEER_GRP_WORK },
+    { "打断你八次的人，都被你忍住了", CHEER_GRP_WORK },
+    { "今天没说「随便」，决策力在线", CHEER_GRP_WORK },
+    { "你删掉的那段代码，没人敢删", CHEER_GRP_WORK },
+    { "需求变了三次，你只翻了一次白眼", CHEER_GRP_WORK },
+    { "准点出现的你，比打卡机可靠", CHEER_GRP_WORK },
+    { "甲方今天没发作，是你的功劳", CHEER_GRP_WORK },
+    { "把截止日期活成了截止日期", CHEER_GRP_WORK },
+    // ---- STUDY ----
+    { "错题本又厚了一页，是真在学", CHEER_GRP_STUDY },
+    { "坐得住冷板凳的人，现在不多了", CHEER_GRP_STUDY },
+    { "那个概念，你今天真的搞懂了", CHEER_GRP_STUDY },
+    { "背了五十个词，忘十个，净赚四十", CHEER_GRP_STUDY },
+    { "你问的问题，老师记住了", CHEER_GRP_STUDY },
+    { "慢慢啃，骨头缝里都是营养", CHEER_GRP_STUDY },
+    { "今天的笔记，未来的你会回来抄", CHEER_GRP_STUDY },
+    { "卡住的地方，恰好在分水岭上", CHEER_GRP_STUDY },
+    { "图书馆的灯，为你多亮了一会儿", CHEER_GRP_STUDY },
+    { "复习没逃，及格线提前谢你", CHEER_GRP_STUDY },
+    { "你划的重点，后来都考了", CHEER_GRP_STUDY },
+    { "一页一页来，书又不会跑", CHEER_GRP_STUDY },
+    { "关掉短视频去背书，这操作很顶", CHEER_GRP_STUDY },
+    { "今天的专注，够写进简历", CHEER_GRP_STUDY },
+    { "同桌刷手机的时候，你在变强", CHEER_GRP_STUDY },
+    { "错一次就会，这是天赋的另一种形态", CHEER_GRP_STUDY },
+    { "倍速听懂，脑子转得比老师快", CHEER_GRP_STUDY },
+    { "背单词软件今天先认输了", CHEER_GRP_STUDY },
+    { "把「明天再说」过成了「今天说了」", CHEER_GRP_STUDY },
+    { "草稿纸的用量，就是思考的密度", CHEER_GRP_STUDY },
+    { "交卷前检查了名字，稳", CHEER_GRP_STUDY },
+    // ---- BRAVE ----
+    { "手心出汗还是举了手，这叫勇", CHEER_GRP_BRAVE },
+    { "没等「准备好」，直接开始了", CHEER_GRP_BRAVE },
+    { "拒绝得干脆，对方反而敬你", CHEER_GRP_BRAVE },
+    { "道歉说出口，比赢一场难", CHEER_GRP_BRAVE },
+    { "第一次总是笨拙的，你迈了", CHEER_GRP_BRAVE },
+    { "把「算了」咽回去，又试了一次", CHEER_GRP_BRAVE },
+    { "紧张着上台，比淡定上台了不起", CHEER_GRP_BRAVE },
+    { "敢说「这个我不懂」，进步开始计时", CHEER_GRP_BRAVE },
+    { "一个人吃饭，一个人扛事，都算", CHEER_GRP_BRAVE },
+    { "退出不合适的局，是成年人的勇", CHEER_GRP_BRAVE },
+    { "没跟风，守住了自己的判断", CHEER_GRP_BRAVE },
+    { "深夜那条消息，你发对了", CHEER_GRP_BRAVE },
+    { "认输认得体面，也是赢", CHEER_GRP_BRAVE },
+    { "说出真实想法，空气都干净了", CHEER_GRP_BRAVE },
+    { "摔了，骂了一句，站起来了", CHEER_GRP_BRAVE },
+    { "那通电话拖了三天，还是打了", CHEER_GRP_BRAVE },
+    { "你替别人说了句公道话", CHEER_GRP_BRAVE },
+    { "眼泪擦干的速度，比想象中快", CHEER_GRP_BRAVE },
+    { "敢麻烦别人，是信任的开始", CHEER_GRP_BRAVE },
+    { "今天没有逃，日子认了", CHEER_GRP_BRAVE },
+    { "重新开始的人，手里都握着旧地图", CHEER_GRP_BRAVE },
+};
+
+const size_t CHEER_CARD_COUNT = sizeof(CHEER_CARDS) / sizeof(CHEER_CARDS[0]);
+
+uint32_t cheer_rng_next(uint32_t *state) {
+    uint32_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x ? x : 0x9E3779B9u;   // never stick at zero
+    return *state;
+}
+
+void cheer_bag_init(cheer_bag_t *bag, uint32_t seed, uint8_t count) {
+    bag->rng = seed ? seed : 1u;
+    bag->count = count;
+    bag->pos = 0;
+    bag->last = -1;
+    for (uint8_t i = 0; i < count; i++) bag->order[i] = i;
+    // Fisher-Yates: shuffle the whole deck once.
+    for (uint8_t i = count - 1; i > 0; i--) {
+        uint32_t r = cheer_rng_next(&bag->rng) % (uint32_t)(i + 1);
+        uint8_t t = bag->order[i];
+        bag->order[i] = bag->order[r];
+        bag->order[r] = t;
+    }
+    // An all-identity shuffle is statistically possible for tiny decks;
+    // with 84 cards it cannot happen, but guard anyway: swap the first two
+    // if the bag came out fully sorted (deterministic, test-friendly).
+    bool sorted = true;
+    for (uint8_t i = 0; i < count; i++) {
+        if (bag->order[i] != i) { sorted = false; break; }
+    }
+    if (sorted && count > 1) {
+        bag->order[0] = 1;
+        bag->order[1] = 0;
+    }
+}
+
+int cheer_bag_draw(cheer_bag_t *bag) {
+    if (bag->count == 0) return -1;
+    if (bag->pos >= bag->count) {
+        int16_t prev_last = bag->last;
+        cheer_bag_t fresh;
+        cheer_bag_init(&fresh, cheer_rng_next(&bag->rng), bag->count);
+        // keep the new rng state and deck, but preserve the no-repeat rule
+        bag->rng = fresh.rng;
+        for (uint8_t i = 0; i < bag->count; i++) bag->order[i] = fresh.order[i];
+        bag->pos = 0;
+        if (bag->order[0] == prev_last && bag->count > 1) {
+            bag->order[0] = bag->order[1];
+            bag->order[1] = (uint8_t)prev_last;
+        }
+    }
+    int idx = bag->order[bag->pos++];
+    bag->last = (int16_t)idx;
+    return idx;
+}
+
+int cheer_stage_of(uint32_t count) {
+    static const uint32_t th[CHEER_STAGE_COUNT] = { 0, 10, 30, 80, 160, 320 };
+    int s = 0;
+    for (int i = 0; i < CHEER_STAGE_COUNT; i++) {
+        if (count >= th[i]) s = i;
+    }
+    return s;
+}
+
+uint32_t cheer_stage_floor(int stage) {
+    static const uint32_t th[CHEER_STAGE_COUNT] = { 0, 10, 30, 80, 160, 320 };
+    if (stage <= 0) return 0;
+    if (stage >= CHEER_STAGE_COUNT) stage = CHEER_STAGE_COUNT - 1;
+    return th[stage];
+}
