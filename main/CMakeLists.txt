@@ -2,11 +2,13 @@ idf_component_register(
     SRCS "main.c"
          "otp_app.c"
          "otp_core.c"
+         "otp_link.c"
          "otp_store.c"
          "otp_power.c"
          "otp_font_20.c"
     INCLUDE_DIRS "."
     REQUIRES bsp esp_hw_support esp_timer nvs_flash
+    PRIV_REQUIRES esp_driver_usb_serial_jtag
 )
 
 # 全量搜索校准的下界锚点:固件构建时刻(UTC 秒)。

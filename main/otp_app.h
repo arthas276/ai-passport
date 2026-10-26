@@ -16,6 +16,7 @@ typedef enum {
     OTP_SCREEN_SECRET,
     OTP_SCREEN_CLOCK,
     OTP_SCREEN_CONFIRM,
+    OTP_SCREEN_LINK,
     OTP_SCREEN_ERROR,
 } otp_screen_t;
 
@@ -23,6 +24,7 @@ typedef enum {
     OTP_MENU_ADD = 0,
     OTP_MENU_CLOCK,
     OTP_MENU_DELETE,
+    OTP_MENU_LINK,
     OTP_MENU_COUNT,
 } otp_menu_item_t;
 

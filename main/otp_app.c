@@ -1,6 +1,8 @@
 #include "otp_app.h"
 
 #include "otp_power.h"
+#include "otp_link.h"
+#include "driver/usb_serial_jtag.h"
 #include "bsp_audio.h"
 #include "bsp_battery.h"
 #include "bsp_button.h"
@@ -31,6 +33,10 @@ static const char SECRET_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 static otp_app_t s_app;
 static otp_power_t s_power;
+static volatile bool s_link_open;
+static TaskHandle_t s_link_task;
+static char s_link_last[48];
+static unsigned s_link_count;
 static lv_obj_t *s_screen;
 static lv_obj_t *s_title;
 static lv_obj_t *s_body;
@@ -126,7 +132,7 @@ static void render_code(void) {
 }
 
 static void render_menu(void) {
-    static const char *items[] = {"新增账号", "设置时间", "删除账号"};
+    static const char *items[] = {"新增账号", "设置时间", "删除账号", "电脑联机"};
     lv_label_set_text(s_title, "设置");
     lv_label_set_text(s_body, items[s_app.menu_item]);
     lv_label_set_text_fmt(s_detail, "%u / %u", s_app.menu_item + 1u, OTP_MENU_COUNT);
@@ -156,6 +162,13 @@ static void render_confirm(void) {
     lv_label_set_text(s_footer, "OK确认  长按取消");
 }
 
+static void render_link(void) {
+    lv_label_set_text(s_title, "电脑联机");
+    lv_label_set_text(s_body, s_link_count ? "USB 已开启" : "USB 已开启\n等待指令");
+    lv_label_set_text(s_detail, s_link_last[0] ? s_link_last : "ADD/TIME/DEL/LIST");
+    lv_label_set_text(s_footer, "任意键关闭");
+}
+
 static void render_error(void) {
     lv_label_set_text(s_title, "无法继续");
     lv_label_set_text(s_body, s_app.status[0] ? s_app.status : "错误");
@@ -167,6 +180,7 @@ static void render(void) {
     if (!s_screen) return;
     switch (s_app.screen) {
     case OTP_SCREEN_CODE: render_code(); break;
+    case OTP_SCREEN_LINK: render_link(); break;
     case OTP_SCREEN_MENU: render_menu(); break;
     case OTP_SCREEN_NAME: render_editor(false); break;
     case OTP_SCREEN_SECRET: render_editor(true); break;
@@ -316,6 +330,140 @@ static void enter_sleep(void) {
     esp_restart();
 }
 
+static void link_write(const char *text) {
+    (void)usb_serial_jtag_write_bytes((const uint8_t *)text, strlen(text),
+                                      pdMS_TO_TICKS(100));
+}
+
+/* 应用一条已解析的联机指令并应答;存储/UI 访问与按键处理同样在 LVGL 锁内。 */
+static void link_apply(const otp_link_msg_t *msg) {
+    char reply[96];
+    switch (msg->cmd) {
+    case OTP_LINK_CMD_ADD: {
+        otp_status_t st = otp_store_add(&s_app.store, &msg->account);
+        if (st != OTP_OK || otp_store_save(&s_app.store) != ESP_OK) {
+            snprintf(reply, sizeof(reply), "ERR %s\n",
+                     st == OTP_ERR_FULL ? "已满" : "名称重复");
+        } else {
+            s_app.selected = (uint8_t)(s_app.store.count - 1u);
+            snprintf(reply, sizeof(reply), "OK ADD %s\n", msg->account.name);
+            snprintf(s_link_last, sizeof(s_link_last), "新增 %s", msg->account.name);
+        }
+        break;
+    }
+    case OTP_LINK_CMD_TIME:
+        otp_store_set_clock(&s_app.store, msg->unix_sec);
+        if (otp_store_save(&s_app.store) != ESP_OK) {
+            strcpy(reply, "ERR 保存失败\n");
+        } else {
+            strcpy(reply, "OK TIME\n");
+            snprintf(s_link_last, sizeof(s_link_last), "时间已同步");
+        }
+        break;
+    case OTP_LINK_CMD_DEL: {
+        int idx = -1;
+        for (uint8_t i = 0; i < s_app.store.count; i++) {
+            if (strcmp(s_app.store.accounts[i].name, msg->account.name) == 0) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            strcpy(reply, "ERR 无此账号\n");
+            break;
+        }
+        (void)otp_store_remove(&s_app.store, (uint8_t)idx);
+        if (otp_store_save(&s_app.store) != ESP_OK) {
+            strcpy(reply, "ERR 保存失败\n");
+            break;
+        }
+        if (s_app.selected >= s_app.store.count && s_app.store.count) {
+            s_app.selected = (uint8_t)(s_app.store.count - 1u);
+        }
+        strcpy(reply, "OK DEL\n");
+        snprintf(s_link_last, sizeof(s_link_last), "删除 %s", msg->account.name);
+        break;
+    }
+    case OTP_LINK_CMD_LIST: {
+        size_t off = (size_t)snprintf(reply, sizeof(reply), "OK LIST %u:",
+                                      (unsigned)s_app.store.count);
+        for (uint8_t i = 0; i < s_app.store.count && off + 2u < sizeof(reply); i++) {
+            off += (size_t)snprintf(reply + off, sizeof(reply) - off, " %s",
+                                    s_app.store.accounts[i].name);
+        }
+        snprintf(reply + off, sizeof(reply) - off, "\n");
+        snprintf(s_link_last, sizeof(s_link_last), "列出 %u 个", (unsigned)s_app.store.count);
+        break;
+    }
+    default:
+        strcpy(reply, "ERR 未知指令\n");
+        break;
+    }
+    s_link_count++;
+    if (s_app.screen == OTP_SCREEN_LIST || s_app.screen == OTP_SCREEN_CODE ||
+        s_app.screen == OTP_SCREEN_LINK) {
+        render();
+    }
+    link_write(reply);
+}
+
+static void link_task(void *arg) {
+    (void)arg;
+    char line[OTP_LINK_LINE_MAX];
+    size_t fill = 0;
+    link_write("OK LINK OPEN\n");
+    while (s_link_open) {
+        uint8_t ch = 0;
+        int n = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(100));
+        if (n <= 0) continue;
+        if (ch == '\n' || ch == '\r') {
+            if (fill == 0) continue;
+            line[fill] = '\0';
+            fill = 0;
+            otp_link_msg_t msg;
+            const char *err = NULL;
+            if (!otp_link_parse(line, &msg, &err)) {
+                char bad[80];
+                snprintf(bad, sizeof(bad), "ERR %s\n", err);
+                link_write(bad);
+                continue;
+            }
+            if (!bsp_lvgl_lock(1000)) {
+                link_write("ERR 忙\n");
+                continue;
+            }
+            link_apply(&msg);
+            bsp_lvgl_unlock();
+            continue;
+        }
+        if (fill + 1u >= sizeof(line)) {
+            fill = 0;
+            link_write("ERR 行太长\n");
+            continue;
+        }
+        line[fill++] = (char)ch;
+    }
+    link_write("OK LINK CLOSE\n");
+    s_link_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void link_start(void) {
+    if (s_link_open) return;
+    s_link_last[0] = '\0';
+    s_link_count = 0;
+    s_link_open = true;
+    if (xTaskCreate(link_task, "otp_link", 4096, NULL, 4, &s_link_task) != pdPASS) {
+        s_link_open = false;
+        s_link_task = NULL;
+        open_error("联机任务失败");
+    }
+}
+
+static void link_stop(void) {
+    s_link_open = false;   /* 任务在下个 100ms 轮询自行退出 */
+}
+
 static void tick(lv_timer_t *timer) {
     (void)timer;
     otp_power_advance(&s_power, 250u);
@@ -364,6 +512,9 @@ static void handle_key(int button, int event) {
             } else if (s_app.menu_item == OTP_MENU_CLOCK) {
                 clear_draft();
                 s_app.screen = OTP_SCREEN_CLOCK;
+            } else if (s_app.menu_item == OTP_MENU_LINK) {
+                link_start();
+                s_app.screen = OTP_SCREEN_LINK;
             } else {
                 s_app.screen = OTP_SCREEN_CONFIRM;
             }
@@ -417,6 +568,10 @@ static void handle_key(int button, int event) {
             s_app.screen = OTP_SCREEN_LIST;
         }
         break;
+    case OTP_SCREEN_LINK:
+        link_stop();
+        s_app.screen = OTP_SCREEN_LIST;
+        break;
     case OTP_SCREEN_ERROR:
         s_app.screen = s_app.return_screen;
         break;
@@ -463,6 +618,12 @@ esp_err_t otp_app_start(void) {
     battery_refresh();
     (void)bsp_audio_init();
     (void)bsp_audio_sleep();
+
+    const usb_serial_jtag_driver_config_t link_cfg = {
+        .rx_buffer_size = 256,
+        .tx_buffer_size = 256,
+    };
+    (void)usb_serial_jtag_driver_install(&link_cfg);
 
     s_keys = xQueueCreate(8, sizeof(otp_key_t));
     if (!s_keys || xTaskCreate(key_task, "otp_keys", 4096, NULL, 5, &s_key_task) != pdPASS) return ESP_ERR_NO_MEM;

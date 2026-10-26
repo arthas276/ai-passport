@@ -5,7 +5,7 @@
 > Status: Taken over from an external delivery bundle, maintained in this repo since 2026-10-25; pending on-device verification
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/otp (from upstream main)
-> PRD version: v1.1 (2026-10-25: takeover redesign — RTC-backed system time, full-range first calibration search, 5-minute timer wake removed)
+> PRD version: v1.2 (2026-10-26: USB link console - the new "PC link" menu page (item 4) accepts ADD/TIME/DEL/LIST lines over the USB serial console while open, with tools/otp_tool.py on the host; keyboard secret entry and PC-clock sync replace the button-typed Base32 slog for USB users; replies never echo secrets); v1.1 (2026-10-25: takeover redesign — RTC-backed system time, full-range first calibration search, 5-minute timer wake removed)
 > Mode: written by an external program, maintained here; the RFC 6238 core is pure logic and host-testable
 <a href="README.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
@@ -25,11 +25,13 @@ The device opens the account list directly. It does not enter the hardware-test 
 
 Names use uppercase letters, digits, and spaces. Select > to finish the name. Secrets use Base32. To set the clock, add one account first, then enter the current six-digit code from another trusted device. A calibrated device searches only a two-minute window around the entry; an uncalibrated one (fresh device, or after battery removal) runs a full-range search from the anchor time — usually seconds, at most a minute or two, with an on-screen progress. On a match the system time is set, and the RTC slow clock keeps it running across deep sleep and reboots.
 
+Typing a Base32 secret on three buttons is error-prone, so USB users have a better path (v1.2): open the "PC link" page (menu item 4) and run `tools/otp_tool.py` on the connected computer — `add` sends the name and secret typed on a real keyboard, `time` syncs the clock from the computer (no code search needed), `del` and `list` manage accounts. The console only listens while that page is open, and replies never contain secrets. The on-device button flow stays fully usable offline.
+
 Accounts, secrets, and the time survive reboots (including deep-sleep wake). A full flash or erased NVS clears them; flashing a merged image at `0x0` can do that — a normal flashing effect, not a reset of the OTP algorithm. Only removing the battery loses the time; recalibrate afterwards.
 
 ## Implementation
 
-The application lives in `main/otp_core.c`, `otp_store.c`, `otp_power.c`, and `otp_app.c`. The algorithm is separate from LVGL, so the RFC 6238 tests run without a board. The screens are a new dark UI using a 20 px LXGW WenKai subset; they do not reuse the baseline test menu.
+The application lives in `main/otp_core.c`, `otp_store.c`, `otp_power.c`, `otp_link.c`, and `otp_app.c`. The algorithm and the link-line parser are separate from LVGL, so the RFC 6238 and protocol tests run without a board. The screens are a new dark UI using a 20 px LXGW WenKai subset; they do not reuse the baseline test menu.
 
 Pins, button windows, the display, and the deep-sleep shutdown order remain owned by the BSP. GPIO0 stays with the button BSP, and sleep uses the existing terminal shutdown calls.
 
