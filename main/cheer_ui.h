@@ -17,3 +17,9 @@ void cheer_ui_set_battery(int soc);
 
 // Reset the idle timer / restore full backlight (any key).
 void cheer_ui_note_activity(void);
+
+// Deep-sleep hook: called from the idle timer (esp_timer task, keep it
+// bounded) once idle passes the sleep threshold, every second until sleep
+// happens or activity resets the timer. The app owns the sleep sequence.
+typedef void (*cheer_ui_idle_sleep_cb_t)(void);
+void cheer_ui_set_idle_sleep_cb(cheer_ui_idle_sleep_cb_t cb);

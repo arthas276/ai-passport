@@ -27,7 +27,9 @@
 
 - Same board baseline as the repository guide; battery % top-right with
   the cell voltage underneath (bsp_battery_soc()/bsp_battery_mv(),
-  -1 -> "--%" / "--.-V", refreshed by a 5 s LVGL timer)
+  -1 -> "--%" / "--.-V"). Readings are cached in RTC memory so a deep-sleep
+  wake immediately shows the pre-sleep values; a 30 s LVGL timer refreshes
+  them (and every draw refreshes instantly)
 - No RTC: growth is driven by the lifetime collected-count, never by dates
 - ES8311 playback only in v1 (no capture); Q15 integer wavetable synth
   ported from EAR BUDDY's ear_tone.c (no-FPU-safe, ~1% CPU)
@@ -51,7 +53,9 @@ Single screen, redesigned UI (not the demo shell):
 - UP/DOWN: browse the drawing history (most recent first, cap
   CHEER_HISTORY_CAP; browsing plays no sound and does not change the
   count); the first OK after browsing draws a fresh card
-- 10 s idle dims the backlight to 30%; any key wakes (repo convention)
+- 10 s idle dims the backlight to 30%; 60 s idle enters deep sleep with
+  any-key GPIO wake (~0.6 s to ready; SOC/voltage re-read fresh each boot,
+  gauge suspend/restart handshake per the baseline low-power demo)
 
 ## 4. Technical Architecture
 

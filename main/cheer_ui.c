@@ -14,10 +14,13 @@
 
 #include "bsp_battery.h"
 #include "bsp_display.h"
+#include "esp_attr.h"
 #include "esp_timer.h"
 #include "lvgl.h"
 
 #define IDLE_DIM_MS 10000
+// 深睡阈值:空闲超过此时长由空闲定时器回调通知应用层入睡(按键唤醒)。
+#define IDLE_SLEEP_MS 60000
 
 // Night-lamp theme: deep warm-brown night background, cream card glows
 // like a paper lantern, chrome text in cream. Contrast on night bg:
@@ -56,6 +59,7 @@ static lv_obj_t *s_lantern;
 static uint32_t s_idle_ms;
 static bool s_dimmed;
 static esp_timer_handle_t s_idle_timer;
+static cheer_ui_idle_sleep_cb_t s_sleep_cb;
 
 static void idle_timer_cb(void *arg) {
     (void)arg;
@@ -64,6 +68,13 @@ static void idle_timer_cb(void *arg) {
         bsp_display_backlight(30);
         s_dimmed = true;
     }
+    // 达到深睡阈值后每秒回调一次:拒绝入睡(按键被按住)时下一秒自动重试,
+    // 活动重置计时后自然停止。回调运行在 esp_timer 任务,必须保持有界。
+    if (s_idle_ms >= IDLE_SLEEP_MS && s_sleep_cb) s_sleep_cb();
+}
+
+void cheer_ui_set_idle_sleep_cb(cheer_ui_idle_sleep_cb_t cb) {
+    s_sleep_cb = cb;
 }
 
 void cheer_ui_note_activity(void) {
@@ -81,15 +92,28 @@ static void pulse_cb(lv_timer_t *t) {
     lv_obj_set_style_bg_opa(s_light, bright ? 250 : 170, 0);
 }
 
-// Battery corner: % on top, cell voltage underneath. CW2017 gives both;
-// the tick runs inside the LVGL task (lock held, same pattern as the
-// baseline BATTERY demo) and costs two I2C register reads per period.
+// 深睡中电量计会挂起重启，唤醒后 SOC 要 ~1-3 秒重锚（期间会读出 0 之类的
+// 窗口假值）。用 RTC 内存缓存最后有效读数：跨深睡存活、真断电失效、
+// 零写入损耗（demo_low_power 同款机制）。唤醒后先显缓存值，首个 30 秒
+// tick 到来时电量计早已重锚完毕；抽卡按键仍即时刷新。
+#define BATT_CACHE_MAGIC 0x42415454UL  // "BATT"
+static RTC_DATA_ATTR uint32_t s_batt_cache_magic;
+static RTC_DATA_ATTR int32_t s_batt_cache_soc;
+static RTC_DATA_ATTR int32_t s_batt_cache_mv;
+
+// 保持最后有效值：重启窗口内单次读可能 NACK(-1)，不闪 "--"；占位符只在
+// 从未读到过有效值时出现。
 static void battery_apply(int soc, int mv) {
-    if (soc < 0) lv_label_set_text(s_batt, "--%");
-    else lv_label_set_text_fmt(s_batt, "%d%%", soc);
-    if (mv < 0) lv_label_set_text(s_volt, "--.-V");
-    else lv_label_set_text_fmt(s_volt, "%d.%02dV", mv / 1000,
-                               (mv % 1000) / 10);
+    if (soc >= 0) { s_batt_cache_soc = soc; s_batt_cache_magic = BATT_CACHE_MAGIC; }
+    if (mv >= 0) { s_batt_cache_mv = mv; s_batt_cache_magic = BATT_CACHE_MAGIC; }
+    if (s_batt_cache_magic != BATT_CACHE_MAGIC) {
+        lv_label_set_text(s_batt, "--%");
+        lv_label_set_text(s_volt, "--.-V");
+        return;
+    }
+    lv_label_set_text_fmt(s_batt, "%d%%", (int)s_batt_cache_soc);
+    lv_label_set_text_fmt(s_volt, "%d.%02dV", (int)s_batt_cache_mv / 1000,
+                           ((int)s_batt_cache_mv % 1000) / 10);
 }
 
 static void battery_tick_cb(lv_timer_t *t) {
@@ -201,8 +225,14 @@ void cheer_ui_build(void) {
     lantern_build(scr);
     lantern_apply(0);
     (void)lv_timer_create(pulse_cb, 350, NULL);
-    battery_tick_cb(NULL);                       // paint real values now,
-    (void)lv_timer_create(battery_tick_cb, 5000, NULL);  // refresh every 5 s
+    // 有缓存（深睡唤醒）先显睡前值，等首个 30 秒 tick 再取新读数；无缓存
+    // （冷启动/首次上电）立即读一次。
+    if (s_batt_cache_magic == BATT_CACHE_MAGIC) {
+        battery_apply(-1, -1);
+    } else {
+        battery_tick_cb(NULL);
+    }
+    (void)lv_timer_create(battery_tick_cb, 30000, NULL);
 
     const esp_timer_create_args_t ta = {
         .callback = idle_timer_cb,

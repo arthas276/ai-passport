@@ -19,6 +19,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_sleep.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "lvgl.h"
@@ -37,6 +38,7 @@ typedef struct {
 
 static QueueHandle_t s_input_queue;
 static TaskHandle_t s_input_task;
+static TaskHandle_t s_sleep_task;
 static volatile bool s_input_ready;
 
 static cheer_save_t s_save;
@@ -85,9 +87,9 @@ static void do_browse(int dir) {
 }
 
 static void process_input(const input_event_t *input) {
+    cheer_ui_note_activity();   // 任意按键事件(含长按/抬起)都重置空闲计时
     if (input->event != BSP_BTN_CLICK) return;
     if (!bsp_lvgl_lock(200)) return;
-    cheer_ui_note_activity();
     if (input->btn == BSP_BTN_OK) {
         do_draw();
     } else if (input->btn == BSP_BTN_UP) {
@@ -105,6 +107,53 @@ static void input_task(void *arg) {
         if (xQueueReceive(s_input_queue, &input, portMAX_DELAY) == pdTRUE) {
             process_input(&input);
         }
+    }
+}
+
+static void idle_sleep_notify(void) {
+    if (s_sleep_task) (void)xTaskNotify(s_sleep_task, 1, eNoAction);
+}
+
+static void sleep_warn(const char *step, esp_err_t err) {
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "深睡继续：%s 失败: %s", step, esp_err_to_name(err));
+    }
+}
+
+// 空闲深睡(序列同 demo_low_power 契约):先按电压拒绝被按住的键;按键脚
+// 交回数字输入+上拉是终态操作,失败只能重启;任一键拉低 GPIO0 唤醒;
+// CW2017 与 ES8311 共享 I2C,电量计挂起必须在总线释放前完成;最后停 LVGL
+// 刷屏并挂起屏幕。唤醒后 app_main 重新走完整启动,key_guard 已在位。
+static void sleep_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        const int mv = bsp_button_read_mv();
+        if (mv >= 0 && mv < BSP_BTN_MV_RELEASED_MIN) continue;  // 按住,下秒重试
+        ESP_LOGI(TAG, "空闲 60 秒,进入深睡(任意键唤醒)");
+        int level = 0;
+        if (bsp_button_prepare_deep_sleep(&level) != ESP_OK) {
+            ESP_LOGE(TAG, "按键交回失败,重启恢复外设");
+            esp_restart();
+        }
+        if (level != 1) {
+            ESP_LOGW(TAG, "入睡前按键仍被按住,本次深睡可能立即唤醒");
+        }
+        sleep_warn("GPIO wake arm",
+                   esp_deep_sleep_enable_gpio_wakeup(
+                       1ULL << BSP_BTN_GPIO, ESP_GPIO_WAKEUP_GPIO_LOW));
+        sleep_warn("CW2017 suspend", bsp_battery_sleep());
+        sleep_warn("ES8311 suspend", bsp_audio_sleep());
+        sleep_warn("I2S pin release", bsp_audio_prepare_deep_sleep());
+        sleep_warn("shared I2C pin release", bsp_i2c_prepare_deep_sleep());
+        if (!bsp_lvgl_lock(1000)) {
+            ESP_LOGE(TAG, "深睡前无法停 LVGL 刷屏,重启恢复外设");
+            esp_restart();
+        }
+        sleep_warn("ST7789 suspend", bsp_display_prepare_deep_sleep());
+        esp_deep_sleep_start();
+        ESP_LOGE(TAG, "esp_deep_sleep_start 意外返回,重启恢复外设");
+        esp_restart();
     }
 }
 
@@ -148,10 +197,12 @@ void app_main(void) {
                  BSP_LCD_BL);
         return;
     }
-    bsp_display_backlight(100);
+    bsp_display_backlight(0);
 
     const bool audio_ok = bsp_audio_init() == ESP_OK;
-    const bool battery_ok = bsp_battery_init() == ESP_OK;
+    if (bsp_battery_init() != ESP_OK) {
+        ESP_LOGW(TAG, "电量计未就绪(软降级,运行期读数继续透传)");
+    }
 
     s_input_queue = xQueueCreate(INPUT_QUEUE_DEPTH, sizeof(input_event_t));
     if (!s_input_queue ||
@@ -169,6 +220,14 @@ void app_main(void) {
         key_guard_sync_released(&s_key_guard, released);
     }
 
+    // 空闲深睡任务:创建失败不致命(只是不省电),回调判空保护。
+    if (xTaskCreate(sleep_task, "cheer_sleep", 3072, NULL, 4,
+                    &s_sleep_task) != pdPASS) {
+        ESP_LOGE(TAG, "深睡任务创建失败,仅失去空闲省电");
+        s_sleep_task = NULL;
+    }
+    cheer_ui_set_idle_sleep_cb(idle_sleep_notify);
+
     cheer_store_load(&s_save);
     cheer_bag_init(&s_bag, esp_random(), (uint8_t)CHEER_CARD_COUNT);
 
@@ -179,10 +238,11 @@ void app_main(void) {
     if (bsp_lvgl_lock(1000)) {
         cheer_ui_build();
         cheer_ui_set_progress(s_save.praise);
-        cheer_ui_set_battery(battery_ok ? bsp_battery_soc() : -1);
         bsp_lvgl_unlock();
         s_input_ready = true;
     }
+    // 首帧已上屏后才点亮背光:消除唤醒时"白屏一小会儿"(背光先于绘制亮起)。
+    bsp_display_backlight(100);
 
     ESP_LOGI(TAG, "CHEER ready (praise %lu, audio %d)",
              (unsigned long)s_save.praise, audio_ok);
