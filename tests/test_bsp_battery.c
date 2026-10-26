@@ -19,7 +19,7 @@ static const uint8_t previous_profile[80] = {
 
 static uint8_t registers[256], config_writes[8];
 static unsigned adds, removes, reads, writes, profile_writes, verified_reads;
-static unsigned flag_writes, config_count, delay_ms, soc_polls;
+static unsigned flag_writes, config_count, delay_ms, soc_polls, vcell_polls;
 static int fail_read_reg, fail_write_reg, corrupt_read_reg;
 static unsigned fail_reads, fail_writes;
 static bool missing_device, fail_bus, fail_add;
@@ -28,6 +28,7 @@ static int bus_token, device_token;
 static void reset_device(bool matched, bool flag)
 {
     s_dev = NULL; // Simulate a fresh application boot, not a driver deinit API.
+    s_ready = false;
     memset(registers, 0, sizeof(registers));
     memset(config_writes, 0, sizeof(config_writes));
     memcpy(registers + CW_REG_PROFILE,
@@ -38,7 +39,7 @@ static void reset_device(bool matched, bool flag)
     registers[CW_REG_SOC_H] = 62;
     registers[CW_REG_VCELL_H] = 0x32; // 12800 * 312.5 uV = 4000 mV.
     adds = removes = reads = writes = profile_writes = verified_reads = 0;
-    flag_writes = config_count = delay_ms = soc_polls = 0;
+    flag_writes = config_count = delay_ms = soc_polls = vcell_polls = 0;
     fail_read_reg = fail_write_reg = corrupt_read_reg = -1;
     fail_reads = fail_writes = 0;
     missing_device = fail_bus = fail_add = false;
@@ -104,6 +105,7 @@ esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t device,
     assert(read_length > 0 && (size_t)reg + read_length <= sizeof(registers));
     ++reads;
     if (reg == CW_REG_SOC_H && read_length == 1) ++soc_polls;
+    if (reg == CW_REG_VCELL_H && read_length == 2) ++vcell_polls;
     if ((missing_device && reg == CW_REG_VERSION) ||
         (reg == fail_read_reg && fail_reads)) {
         if (fail_reads) --fail_reads;
@@ -233,9 +235,9 @@ static void test_soc_and_voltage(void)
     reset_device(true, true);
     registers[CW_REG_SOC_H] = 101;
     assert(bsp_battery_init() == ESP_ERR_TIMEOUT);
-    assert(soc_polls == 50 && delay_ms == 5000 && removes == 1 && !s_dev);
+    assert(soc_polls == 20 && delay_ms == 2000 && removes == 0 && s_dev);
     registers[CW_REG_SOC_H] = 100;
-    assert(bsp_battery_init() == ESP_OK);
+    assert(bsp_battery_init() == ESP_OK);   // retry re-runs only the wait
     assert(bsp_battery_soc() == 100);
     registers[CW_REG_SOC_H] = 0;
     assert(bsp_battery_soc() == 0);
@@ -262,7 +264,45 @@ static void test_soc_and_voltage(void)
     fail_read_reg = CW_REG_SOC_H;
     fail_reads = 50;
     assert(bsp_battery_init() == ESP_ERR_TIMEOUT);
-    assert(soc_polls == 50 && delay_ms == 5000 && removes == 1 && !s_dev);
+    assert(soc_polls == 20 && delay_ms == 2000 && removes == 0 && s_dev);
+}
+
+static void test_restart_window_gate(void)
+{
+    // Post-restart recompute window: SOC reads 0 AND VCELL reads 0. The old
+    // gate accepted soc<=100 instantly, so the ready log and the first UI
+    // frame showed a lying "voltage=0 mV" (observed on hardware 2026-10-26).
+    reset_device(true, true);
+    registers[CW_REG_SOC_H] = 0;
+    registers[CW_REG_VCELL_H] = 0;
+    registers[CW_REG_VCELL_H + 1] = 0;
+    assert(bsp_battery_init() == ESP_ERR_TIMEOUT);
+    assert(soc_polls == 20 && vcell_polls == 20 && delay_ms == 2000);
+    assert(removes == 0 && s_dev);
+    // Soft degradation: runtime reads keep reporting the chip's live truth
+    // (here still the window's 0/0), and a retry re-runs only the wait.
+    assert(bsp_battery_soc() == 0 && bsp_battery_mv() == 0);
+    registers[CW_REG_SOC_H] = 62;
+    registers[CW_REG_VCELL_H] = 0x32;
+    registers[CW_REG_VCELL_H + 1] = 0x00;
+    assert(bsp_battery_init() == ESP_OK);
+    assert(bsp_battery_soc() == 62 && bsp_battery_mv() == 4000);
+
+    // An honest empty cell: SOC 0 with a real voltage still passes.
+    reset_device(true, true);
+    registers[CW_REG_SOC_H] = 0;
+    registers[CW_REG_VCELL_H] = 0x1F;   // raw 8000 -> 2500 mV
+    registers[CW_REG_VCELL_H + 1] = 0x40;
+    assert(bsp_battery_init() == ESP_OK);
+    assert(soc_polls == 1 && vcell_polls == 1);
+    assert(bsp_battery_soc() == 0 && bsp_battery_mv() == 2500);
+
+    // Just under the floor keeps waiting (pack at/below protection floor).
+    reset_device(true, true);
+    registers[CW_REG_VCELL_H] = 0x1F;   // raw 7999 -> 2499 mV
+    registers[CW_REG_VCELL_H + 1] = 0x3F;
+    assert(bsp_battery_init() == ESP_ERR_TIMEOUT);
+    assert(vcell_polls == 20);
 }
 
 int main(void)
@@ -271,6 +311,7 @@ int main(void)
     test_profile_failures();
     test_missing_and_recovery();
     test_soc_and_voltage();
+    test_restart_window_gate();
     puts("CW2017 battery: profile migration/readback, match, faults, retry, SOC/voltage PASS");
     return 0;
 }
