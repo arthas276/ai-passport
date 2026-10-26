@@ -12,6 +12,7 @@
 #include "cheer.h"
 #include "ui_pixel.h"
 
+#include "bsp_battery.h"
 #include "bsp_display.h"
 #include "esp_timer.h"
 #include "lvgl.h"
@@ -43,6 +44,7 @@ static const uint32_t GROUP_COLORS[CHEER_GRP_COUNT] = {
 };
 
 static lv_obj_t *s_batt;
+static lv_obj_t *s_volt;
 static lv_obj_t *s_chip;
 static lv_obj_t *s_text;
 static lv_obj_t *s_hist;
@@ -77,6 +79,22 @@ static void pulse_cb(lv_timer_t *t) {
     static bool bright;
     bright = !bright;
     lv_obj_set_style_bg_opa(s_light, bright ? 250 : 170, 0);
+}
+
+// Battery corner: % on top, cell voltage underneath. CW2017 gives both;
+// the tick runs inside the LVGL task (lock held, same pattern as the
+// baseline BATTERY demo) and costs two I2C register reads per period.
+static void battery_apply(int soc, int mv) {
+    if (soc < 0) lv_label_set_text(s_batt, "--%");
+    else lv_label_set_text_fmt(s_batt, "%d%%", soc);
+    if (mv < 0) lv_label_set_text(s_volt, "--.-V");
+    else lv_label_set_text_fmt(s_volt, "%d.%02dV", mv / 1000,
+                               (mv % 1000) / 10);
+}
+
+static void battery_tick_cb(lv_timer_t *t) {
+    (void)t;
+    battery_apply(bsp_battery_soc(), bsp_battery_mv());
 }
 
 static lv_obj_t *part(lv_obj_t *parent, int x, int y, int w, int h,
@@ -132,8 +150,14 @@ void cheer_ui_build(void) {
     lv_obj_t *title = ui_pixel_label(scr, "CHEER", &lv_font_montserrat_20,
                                      CREAM);
     lv_obj_set_pos(title, 14, 8);
+    // Right-aligned corner: worst-case "4.44V" measures 41.25 px in
+    // Montserrat 14, so a fixed x of 204 would push it past the 240 px edge
+    // (204+41>240). Anchoring both labels to the right edge keeps every
+    // string inside with a constant 12 px pad.
     s_batt = ui_pixel_label(scr, "80%", &lv_font_montserrat_14, CARD_MUTED);
-    lv_obj_set_pos(s_batt, 204, 12);
+    lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -12, 12);
+    s_volt = ui_pixel_label(scr, "--.-V", &lv_font_montserrat_14, CARD_MUTED);
+    lv_obj_align(s_volt, LV_ALIGN_TOP_RIGHT, -12, 30);
 
     // The card is the hero: x14 y50 w212 h172 (four 24 px CJK lines fit).
     lv_obj_t *card = lv_obj_create(scr);
@@ -177,6 +201,8 @@ void cheer_ui_build(void) {
     lantern_build(scr);
     lantern_apply(0);
     (void)lv_timer_create(pulse_cb, 350, NULL);
+    battery_tick_cb(NULL);                       // paint real values now,
+    (void)lv_timer_create(battery_tick_cb, 5000, NULL);  // refresh every 5 s
 
     const esp_timer_create_args_t ta = {
         .callback = idle_timer_cb,
@@ -219,9 +245,5 @@ void cheer_ui_set_progress(uint32_t count) {
 }
 
 void cheer_ui_set_battery(int soc) {
-    if (soc < 0) {
-        lv_label_set_text(s_batt, "--%");
-    } else {
-        lv_label_set_text_fmt(s_batt, "%d%%", soc);
-    }
+    battery_apply(soc, bsp_battery_mv());
 }

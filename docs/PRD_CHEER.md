@@ -25,8 +25,9 @@
 
 ## 2. Hardware Facts
 
-- Same board baseline as the repository guide; battery % top-right
-  (bsp_battery_soc(), -1 -> "--%")
+- Same board baseline as the repository guide; battery % top-right with
+  the cell voltage underneath (bsp_battery_soc()/bsp_battery_mv(),
+  -1 -> "--%" / "--.-V", refreshed by a 5 s LVGL timer)
 - No RTC: growth is driven by the lifetime collected-count, never by dates
 - ES8311 playback only in v1 (no capture); Q15 integer wavetable synth
   ported from EAR BUDDY's ear_tone.c (no-FPU-safe, ~1% CPU)
@@ -36,7 +37,7 @@
 
 Single screen, redesigned UI (not the demo shell):
 
-- Top: "CHEER" title; battery % top-right
+- Top: "CHEER" title; battery % and voltage top-right
 - Center: the praise card - category chip (Montserrat 14, DAILY/WORK/
   STUDY/BRAVE) above the card text in the bundled CJK font, up to 3 lines
 - Below the card: the spirit, a procedurally drawn wisp whose palette
