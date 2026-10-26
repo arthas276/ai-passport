@@ -29,6 +29,7 @@ typedef struct {
     uint8_t root;
     uint8_t kind;
     uint8_t dir;                     // interval direction (v1.6)
+    uint8_t inv;                     // chord inversion rotation (v1.9 L5)
     float target_hz;
     float tol_cents;
     ear_duet_phrase_t phrase;        // CMD_DUET_PLAY payload (v1.3)
@@ -128,7 +129,8 @@ static void play_together(const uint8_t *notes, int count, int ms, float amp) {
 // Interval direction (v1.6): UP = root first, DOWN = higher note first,
 // HARM = both notes together via the chord mixer (slightly hotter per-
 // voice amp than a 3-note chord so the pair stays audible on the speaker).
-static void play_question(uint8_t root, uint8_t kind_idx, uint8_t dir) {
+static void play_question(uint8_t root, uint8_t kind_idx, uint8_t dir,
+                           uint8_t inv) {
     const ear_kind_info_t *k = &EAR_KINDS[kind_idx];
     if (k->len == 0) {                        // interval
         uint8_t lo = root, hi = root + k->semis;
@@ -143,8 +145,14 @@ static void play_question(uint8_t root, uint8_t kind_idx, uint8_t dir) {
         play_gap(GAP_MS);
         play_note(second, NOTE_MS, 0.9f);
     } else {                                  // chord: notes together
+        // inv (v1.9): rotate which chord tone is lowest - the wrapped tones
+        // drop an octave, producing first/second/third inversions. The
+        // pitch content (quality) is unchanged, so grading stays quality-only.
         uint8_t notes[4];
-        for (int i = 0; i < k->len; i++) notes[i] = root + k->chord[i];
+        for (int i = 0; i < k->len; i++) {
+            uint8_t j = (uint8_t)((i + inv) % k->len);
+            notes[i] = root + k->chord[j] - (uint8_t)((i + inv >= k->len) ? 12 : 0);
+        }
         play_together(notes, k->len, CHORD_MS, 0.55f);
     }
 }
@@ -398,7 +406,7 @@ static void audio_task(void *arg) {
         case CMD_QUESTION:
             if (bsp_audio_set_format(EAR_TONE_SR, 16, 1) == ESP_OK) {
                 bsp_audio_set_volume(s_volume);
-                play_question(job.root, job.kind, job.dir);
+                play_question(job.root, job.kind, job.dir, job.inv);
             }
             post_play_done();
             break;
@@ -478,10 +486,10 @@ esp_err_t ear_audio_init(QueueHandle_t event_q) {
 }
 
 void ear_audio_play_question(uint8_t root_midi, ear_kind_t kind,
-                             ear_dir_t dir) {
+                             ear_dir_t dir, uint8_t inv) {
     ear_job_t job = {
         .cmd = CMD_QUESTION, .root = root_midi, .kind = (uint8_t)kind,
-        .dir = (uint8_t)dir,
+        .dir = (uint8_t)dir, .inv = inv,
     };
     xQueueSend(s_job_q, &job, 0);   // drop when busy: UI re-issues
 }

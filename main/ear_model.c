@@ -11,37 +11,48 @@ const ear_kind_info_t EAR_KINDS[EAR_KIND_COUNT] = {
     {"dim", 0xFF, 3, {0, 3, 6, 0}},   {"min", 0xFF, 3, {0, 3, 7, 0}},
     {"maj", 0xFF, 3, {0, 4, 7, 0}},   {"aug", 0xFF, 3, {0, 4, 8, 0}},
     {"M7", 0xFF, 4, {0, 4, 7, 11}},   {"7", 0xFF, 4, {0, 4, 7, 10}},
+    // v1.9 L4/L5 kinds (appended: indices persist in the NVS miss blob).
+    {"m6", 8, 0, {0}},   {"M6", 9, 0, {0}},
+    {"m7", 10, 0, {0}},  {"M7i", 11, 0, {0}},
+    {"P8", 12, 0, {0}},
+    {"m7c", 0xFF, 4, {0, 3, 7, 10}},
 };
 
 // Level option tables: kinds presented per mode and level (PRD 3.1).
-// INTERVAL L1/L2/L3, CHORD L1/L2/L3. SING row unused (kept zeroed).
-const uint8_t EAR_LEVELS[EAR_MODE_COUNT][3][EAR_OPTS_MAX] = {
+// INTERVAL L1..L5, CHORD L1..L5 (v1.9). SING row unused (kept zeroed).
+const uint8_t EAR_LEVELS[EAR_MODE_COUNT][EAR_QUIZ_LEVEL_MAX][EAR_OPTS_MAX] = {
     [EAR_MODE_INTERVAL] = {
         {EAR_KIND_MIN3, EAR_KIND_MAJ3},
         {EAR_KIND_MIN3, EAR_KIND_MAJ3, EAR_KIND_P4, EAR_KIND_P5},
         {EAR_KIND_MIN2, EAR_KIND_MAJ2, EAR_KIND_MIN3, EAR_KIND_MAJ3,
          EAR_KIND_P4, EAR_KIND_P5},
+        {EAR_KIND_P4, EAR_KIND_P5, EAR_KIND_MIN6, EAR_KIND_MAJ6},
+        {EAR_KIND_P5, EAR_KIND_MIN6, EAR_KIND_MAJ6, EAR_KIND_MIN7I,
+         EAR_KIND_MAJ7I, EAR_KIND_OCT},
     },
     [EAR_MODE_CHORD] = {
         {EAR_KIND_MAJ, EAR_KIND_MIN},
         {EAR_KIND_MAJ, EAR_KIND_MIN, EAR_KIND_DIM, EAR_KIND_AUG},
         {EAR_KIND_MAJ, EAR_KIND_MIN, EAR_KIND_DIM, EAR_KIND_AUG,
          EAR_KIND_MAJ7, EAR_KIND_DOM7},
+        {EAR_KIND_MAJ, EAR_KIND_MIN, EAR_KIND_MIN7C, EAR_KIND_DOM7},
+        {EAR_KIND_MAJ, EAR_KIND_MIN, EAR_KIND_DIM, EAR_KIND_MIN7C,
+         EAR_KIND_MAJ7, EAR_KIND_DOM7},
     },
     [EAR_MODE_SING] = {{0}},
 };
 
 // Option count per mode/level (matches EAR_LEVELS rows above).
-const uint8_t EAR_LEVEL_OPT_COUNT[EAR_MODE_COUNT][3] = {
-    [EAR_MODE_INTERVAL] = {2, 4, 6},
-    [EAR_MODE_CHORD]    = {2, 4, 6},
-    [EAR_MODE_SING]     = {0, 0, 0},
+const uint8_t EAR_LEVEL_OPT_COUNT[EAR_MODE_COUNT][EAR_QUIZ_LEVEL_MAX] = {
+    [EAR_MODE_INTERVAL] = {2, 4, 6, 4, 6},
+    [EAR_MODE_CHORD]    = {2, 4, 6, 4, 6},
+    [EAR_MODE_SING]     = {0, 0, 0, 0, 0},
 };
 
 // Fill a fresh session. mode must be INTERVAL or CHORD (SING has no quiz).
 void ear_model_session_init(ear_session_t *s, ear_mode_t mode, uint8_t level) {
     s->mode = mode;
-    s->level = level;   // caller clamps to 1..3 (see auto_level_adjust)
+    s->level = level;   // caller clamps to 1..EAR_QUIZ_LEVEL_MAX (store load)
     s->index = 0;
     s->score = 0;
     s->combo = 0;
@@ -91,7 +102,7 @@ static void shuffle_options(uint8_t *opt, uint8_t n) {
 // only, L2 mixes ascending/descending, L3 adds harmonic. Chords ignore
 // direction (the caller keeps EAR_DIR_UP).
 static ear_dir_t draw_dir(uint8_t level) {
-    uint8_t span = (level >= EAR_LEVEL_MAX) ? EAR_DIR_COUNT
+    uint8_t span = (level >= 3) ? EAR_DIR_COUNT
                  : (level >= 2) ? 2 : 1;
     return (ear_dir_t)(rand() % span);
 }
@@ -111,6 +122,13 @@ void ear_model_next_question(ear_session_t *s, ear_question_t *q) {
     q->root = 60 + (rand() % 10);   // MIDI C4..A4
     q->dir = (s->mode == EAR_MODE_INTERVAL) ? draw_dir(s->level)
                                             : EAR_DIR_UP;   // chords: n/a
+    // Chord inversions (v1.9): only at CHORD L5, rotated voicing; the answer
+    // stays the chord quality. Intervals and L1..L4 chords: root position.
+    if (s->mode == EAR_MODE_CHORD && s->level >= EAR_QUIZ_LEVEL_MAX) {
+        q->inv = (uint8_t)(rand() % EAR_KINDS[drawn].len);
+    } else {
+        q->inv = 0;
+    }
     q->answer = (ear_kind_t)drawn;
     for (uint8_t i = 0; i < n; i++) {
         q->options[i] = EAR_LEVELS[s->mode][s->level - 1][i];
@@ -135,9 +153,10 @@ bool ear_model_grade(ear_session_t *s, const ear_question_t *q, uint8_t choice) 
 
 // Level adjust at session end (PRD 3.1): >=8 -> up (max 3), <=4 -> down
 // (min 1), 5..7 -> unchanged. Returns new level; *changed flags a move.
-uint8_t auto_level_adjust(uint8_t old_level, uint8_t score, bool *changed) {
+uint8_t auto_level_adjust(uint8_t old_level, uint8_t score, uint8_t level_max,
+                          bool *changed) {
     uint8_t lvl = old_level;
-    if (score >= 8 && old_level < EAR_LEVEL_MAX) lvl = old_level + 1;
+    if (score >= 8 && old_level < level_max) lvl = old_level + 1;
     else if (score <= 4 && old_level > EAR_LEVEL_MIN) lvl = old_level - 1;
     *changed = (lvl != old_level);
     return lvl;

@@ -32,9 +32,10 @@ esp_err_t ear_audio_init(QueueHandle_t event_q);
 
 // ---- playback requests (queued, non-blocking) ----
 // dir selects the interval presentation (v1.6): UP/DOWN = two notes in
-// turn, HARM = both together. Chords ignore it.
+// turn, HARM = both together. Chords ignore it. inv (v1.9) rotates the
+// lowest chord tone (inversions, CHORD L5); 0 = root position.
 void ear_audio_play_question(uint8_t root_midi, ear_kind_t kind,
-                             ear_dir_t dir);
+                             ear_dir_t dir, uint8_t inv);
 void ear_audio_play_target(uint8_t midi);
 void ear_audio_play_cue(int cue_id);   // 0=correct 1=wrong 2=evolve
 // ---- sing mode ----

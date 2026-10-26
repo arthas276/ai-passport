@@ -7,8 +7,9 @@
 static const char *NS = "earbuddy";
 
 // Clamp helper for loaded values (NVS could hold stale/foreign data).
-static uint8_t clamp_lvl(uint8_t v) {
-    return v < 1 ? 1 : (v > 3 ? 3 : v);
+// Quiz levels (INTERVAL/CHORD) reach 5 (v1.9); pitch-flow modes stay 1..3.
+static uint8_t clamp_lvl(uint8_t v, uint8_t max) {
+    return v < 1 ? 1 : (v > max ? max : v);
 }
 
 void ear_store_load(ear_save_t *out) {
@@ -32,12 +33,12 @@ void ear_store_load(ear_save_t *out) {
     uint32_t cnt = 0;
     uint8_t v = 0;
     if (nvs_get_u32(h, "xp", &xp) == ESP_OK) out->xp = xp;
-    if (nvs_get_u8(h, "ilvl", &v) == ESP_OK) out->ilvl = clamp_lvl(v);
-    if (nvs_get_u8(h, "clvl", &v) == ESP_OK) out->clvl = clamp_lvl(v);
-    if (nvs_get_u8(h, "slvl", &v) == ESP_OK) out->slvl = clamp_lvl(v);
-    if (nvs_get_u8(h, "dl", &v) == ESP_OK) out->dlvl = clamp_lvl(v);
-    if (nvs_get_u8(h, "rl", &v) == ESP_OK) out->rlvl = clamp_lvl(v);
-    if (nvs_get_u8(h, "vl", &v) == ESP_OK) out->vlvl = clamp_lvl(v);
+    if (nvs_get_u8(h, "ilvl", &v) == ESP_OK) out->ilvl = clamp_lvl(v, 5);
+    if (nvs_get_u8(h, "clvl", &v) == ESP_OK) out->clvl = clamp_lvl(v, 5);
+    if (nvs_get_u8(h, "slvl", &v) == ESP_OK) out->slvl = clamp_lvl(v, 3);
+    if (nvs_get_u8(h, "dl", &v) == ESP_OK) out->dlvl = clamp_lvl(v, 3);
+    if (nvs_get_u8(h, "rl", &v) == ESP_OK) out->rlvl = clamp_lvl(v, 3);
+    if (nvs_get_u8(h, "vl", &v) == ESP_OK) out->vlvl = clamp_lvl(v, 3);
     if (nvs_get_u8(h, "vol", &v) == ESP_OK && v <= 100) out->vol = v;
     if (nvs_get_u32(h, "ans", &cnt) == ESP_OK) out->answered = cnt;
     if (nvs_get_u32(h, "sng", &cnt) == ESP_OK) out->sing_pass = cnt;
@@ -45,9 +46,17 @@ void ear_store_load(ear_save_t *out) {
     if (nvs_get_u32(h, "mel", &cnt) == ESP_OK) out->melodies = cnt;
     if (nvs_get_u8(h, "cmb", &v) == ESP_OK) out->best_combo = v;
     size_t blob = 0;
-    if (nvs_get_blob(h, "km", NULL, &blob) == ESP_OK &&
-        blob == sizeof(out->kind_miss)) {
-        nvs_get_blob(h, "km", out->kind_miss, &blob);
+    if (nvs_get_blob(h, "km", NULL, &blob) == ESP_OK) {
+        if (blob >= sizeof(out->kind_miss)) {
+            nvs_get_blob(h, "km", out->kind_miss, &blob);
+        } else if (blob > 0 && blob % sizeof(uint32_t) == 0) {
+            // v1.8 blob had 13 kinds; v1.9 grows the table to 19. Take the
+            // legacy prefix (kind indices are append-stable) and zero the rest.
+            uint32_t tmp[EAR_KIND_COUNT] = {0};
+            if (nvs_get_blob(h, "km", tmp, &blob) == ESP_OK) {
+                memcpy(out->kind_miss, tmp, blob);
+            }
+        }
     }
     nvs_close(h);
 }

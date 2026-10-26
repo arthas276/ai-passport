@@ -34,9 +34,48 @@ int main(void)
         if ((i + 1) % 100 == 0) s.level = 2;   // exercise L2 tables too
     }
 
+    // v1.9: every level of both quiz modes must produce valid questions
+    // (options unique and in range, answer present, no adjacent repeat),
+    // and inversions only appear for CHORD L5.
+    for (int mode = 0; mode <= 1; mode++) {
+        for (int lvl = 1; lvl <= (int)EAR_QUIZ_LEVEL_MAX; lvl++) {
+            ear_model_session_init(&s, (ear_mode_t)mode, (uint8_t)lvl);
+            uint8_t prev = 0xFF;
+            bool inv_seen = false;
+            for (int i = 0; i < 200; i++) {
+                ear_model_next_question(&s, &q);
+                uint8_t n = EAR_LEVEL_OPT_COUNT[s.mode][s.level - 1];
+                assert(n >= 2 && n <= EAR_OPTS_MAX);
+                int answer_in_options = 0;
+                for (uint8_t k = 0; k < n; k++) {
+                    assert(q.options[k] < EAR_KIND_COUNT);
+                    for (uint8_t j = 0; j < k; j++) {
+                        assert(q.options[j] != q.options[k]);
+                    }
+                    if (q.options[k] == (uint8_t)q.answer) answer_in_options = 1;
+                }
+                assert(answer_in_options);
+                assert((uint8_t)q.answer != prev);
+                prev = (uint8_t)q.answer;
+                if (s.mode == EAR_MODE_CHORD && s.level == EAR_QUIZ_LEVEL_MAX) {
+                    assert(q.inv < EAR_KINDS[q.answer].len);
+                    if (q.inv != 0) inv_seen = true;
+                } else {
+                    assert(q.inv == 0);
+                }
+                if (s.mode == EAR_MODE_CHORD) assert(q.dir == EAR_DIR_UP);
+            }
+            // L5 chord draws must exercise at least one inverted voicing.
+            if (s.mode == EAR_MODE_CHORD) {
+                assert(s.level < EAR_QUIZ_LEVEL_MAX || inv_seen);
+            }
+        }
+    }
+
     // Direction gating (PRD 3.1, v1.6): L1 UP only, L2 adds DOWN, L3 adds
-    // HARM; every allowed direction occurs across 300 draws (fixed seed).
-    for (int lvl = 1; lvl <= 3; lvl++) {
+    // HARM; L4/L5 (v1.9) keep the full span. Every allowed direction occurs
+    // across 300 draws (fixed seed).
+    for (int lvl = 1; lvl <= (int)EAR_QUIZ_LEVEL_MAX; lvl++) {
         ear_model_session_init(&s, EAR_MODE_INTERVAL, (uint8_t)lvl);
         bool seen[EAR_DIR_COUNT] = { false };
         for (int i = 0; i < 300; i++) {
@@ -95,14 +134,31 @@ int main(void)
     assert(!ear_model_grade(&s, &q, (uint8_t)(ans_idx ^ 1)));
     assert(s.combo == 0 && s.score == 1);
 
-    // Level adjust boundaries (PRD 3.1).
+    // Level adjust boundaries (PRD 3.1). Quiz modes cap at 5, pitch-flow
+    // modes at 3 (v1.9 signature takes the ceiling explicitly).
     bool ch = false;
-    assert(auto_level_adjust(1, 8, &ch) == 2 && ch);
-    assert(auto_level_adjust(3, 10, &ch) == 3 && !ch);   // capped at max
-    assert(auto_level_adjust(2, 4, &ch) == 1 && ch);
-    assert(auto_level_adjust(1, 4, &ch) == 1 && !ch);    // floored at min
-    assert(auto_level_adjust(2, 6, &ch) == 2 && !ch);    // 5..7 unchanged
-    assert(auto_level_adjust(3, 4, &ch) == 2 && ch);
+    assert(auto_level_adjust(1, 8, EAR_LEVEL_MAX, &ch) == 2 && ch);
+    assert(auto_level_adjust(3, 10, EAR_LEVEL_MAX, &ch) == 3 && !ch);
+    assert(auto_level_adjust(2, 4, EAR_LEVEL_MAX, &ch) == 1 && ch);
+    assert(auto_level_adjust(1, 4, EAR_LEVEL_MAX, &ch) == 1 && !ch);
+    assert(auto_level_adjust(2, 6, EAR_LEVEL_MAX, &ch) == 2 && !ch);
+    assert(auto_level_adjust(3, 4, EAR_LEVEL_MAX, &ch) == 2 && ch);
+    assert(auto_level_adjust(4, 9, EAR_QUIZ_LEVEL_MAX, &ch) == 5 && ch);
+    assert(auto_level_adjust(5, 10, EAR_QUIZ_LEVEL_MAX, &ch) == 5 && !ch);
+    assert(auto_level_adjust(5, 3, EAR_QUIZ_LEVEL_MAX, &ch) == 4 && ch);
+
+    // v1.9 kind table: wider intervals carry the right semitone spans and
+    // the minor seventh chord carries the right offsets; new labels are
+    // distinct from every label offered in the same level option list.
+    assert(EAR_KINDS[EAR_KIND_MIN6].semis == 8);
+    assert(EAR_KINDS[EAR_KIND_MAJ6].semis == 9);
+    assert(EAR_KINDS[EAR_KIND_MIN7I].semis == 10);
+    assert(EAR_KINDS[EAR_KIND_MAJ7I].semis == 11);
+    assert(EAR_KINDS[EAR_KIND_OCT].semis == 12);
+    assert(EAR_KINDS[EAR_KIND_MIN7C].len == 4);
+    assert(EAR_KINDS[EAR_KIND_MIN7C].chord[1] == 3 &&
+           EAR_KINDS[EAR_KIND_MIN7C].chord[2] == 7 &&
+           EAR_KINDS[EAR_KIND_MIN7C].chord[3] == 10);
 
     // Perfect session bonus flag.
     ear_model_session_init(&s, EAR_MODE_INTERVAL, 1);
@@ -111,6 +167,6 @@ int main(void)
     s.score = 9;
     assert(!ear_model_perfect(&s));
 
-    printf("model: grading + level adjust ok\n");
+    printf("model: grading + level adjust + L4/L5 ok\n");
     return 0;
 }

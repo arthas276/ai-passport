@@ -5,7 +5,11 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.8 (2026-10-20: weakness-weighted quiz draws from persisted
+> PRD version: v1.9 (2026-10-26: quiz levels extend to five - L4 adds wider
+> intervals (m6/M6) and the minor-seventh chord m7c, L5 adds m7/M7/P8 and
+> chord inversions (voicing rotated, graded on quality only); per-mode
+> mastery stars on HOME; ilvl/clvl range 1-5 while pitch-flow modes keep
+> 1-3; see 3.1/4/5); v1.8 (2026-10-20: weakness-weighted quiz draws from persisted
 > per-kind miss counts; RHYTHM mode - hear a bar, tap it back on OK after a
 > count-in, graded on onset timing; SIGHTSING mode - read the on-screen
 > melody, hear only the starting note, sing the whole phrase; see 3.1/3.6/
@@ -54,12 +58,19 @@
   ascending only, L2 mixes ascending/descending, L3 mixes asc/desc/harmonic;
   the answer is the interval itself, direction-independent
 - Option sets by level:
-  - INTERVAL: L1 {m3, M3}; L2 {m3, M3, P4, P5}; L3 {m2, M2, m3, M3, P4, P5}
-  - CHORD: L1 {maj, min}; L2 {maj, min, dim, aug}; L3 {maj, min, dim, aug, M7, 7}
+  - INTERVAL: L1 {m3, M3}; L2 {m3, M3, P4, P5}; L3 {m2, M2, m3, M3, P4, P5};
+    L4 {P4, P5, m6, M6} (v1.9); L5 {P5, m6, M6, m7, M7, P8} (v1.9)
+  - CHORD: L1 {maj, min}; L2 {maj, min, dim, aug}; L3 {maj, min, dim, aug,
+    M7, 7}; L4 {maj, min, m7c, 7} (v1.9); L5 {maj, min, dim, m7c, M7, 7}
+    (v1.9)
+- Chord inversions (v1.9, CHORD L5 only): the voicing rotates which chord
+  tone is lowest (wrapped tones drop an octave); the answer stays the chord
+  quality, exactly like direction in interval questions
 - Answer flow: pick with UP/DOWN, confirm with OK; correct -> +1 XP, pet hop
   + happy blip; wrong -> correct option highlighted, correct answer replayed,
   next question; no XP loss
-- Auto level per mode: session score >= 8 -> level up (max 3); <= 4 -> down
+- Auto level per mode: session score >= 8 -> level up (max 5 for quiz modes,
+  v1.9; pitch-flow modes stay max 3); <= 4 -> down
   (min 1); persisted in NVS
 - Combo counter display-only (no XP effect)
 - Tone: additive synthesis (f + 0.40*2f + 0.18*3f, v1.3 re-tint), fast
@@ -238,6 +249,9 @@ HOME
 - bottom: mode card cycling INTERVAL / CHORD / SING / DUET / DICTATION /
   VS BATTLE / RHYTHM / SIGHTSING / SETUP via UP/DOWN (v1.3 adds DUET; v1.4
   adds DICTATION; v1.7 adds VS BATTLE; v1.8 adds RHYTHM and SIGHTSING)
+- mastery star row under the mode card (v1.9): one lit pip per level
+  reached; slot count follows the mode's level ceiling (quiz modes 5,
+  leveled pitch-flow modes 3; DUET/VS/SETUP show no stars)
 - UP/DOWN click: switch mode card; OK click: enter mode; OK long: nothing
 
 QUIZ (solo and VS)
@@ -303,7 +317,8 @@ of each correct answer / PASS).
 
 ## 7. Data & Persistence
 
-NVS namespace earbuddy: xp u32; ilvl/clvl/slvl u8 (1-3); vol u8 (0-100);
+NVS namespace earbuddy: xp u32; ilvl/clvl u8 (1-5, v1.9), slvl u8 (1-3);
+  vol u8 (0-100);
 answered u32; sing_pass u32; best_combo u8 (lifetime stats, v1.2);
 duets u32 key "du" (lifetime duets, v1.3 — old records default to 0);
 dlvl u8 (dictation level 1-3) key "dl" + melodies u32 key "mel"

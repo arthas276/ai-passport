@@ -48,7 +48,11 @@ typedef enum {
 // ---------------------------------------------------------------------------
 #define EAR_QUESTIONS_PER_SESSION 10u
 #define EAR_LEVEL_MIN 1u
-#define EAR_LEVEL_MAX 3u
+// v1.9: INTERVAL/CHORD quizzes grow to five levels (wider intervals at L4,
+// seventh chords + chord inversions at L5). The pitch-flow modes (sing,
+// dictation, rhythm, sightsing) keep their own three-level scale.
+#define EAR_QUIZ_LEVEL_MAX 5u
+#define EAR_LEVEL_MAX 3u   // pitch-flow modes (dictation/rhythm/sightsing)
 
 typedef enum {
     EAR_MODE_INTERVAL = 0,
@@ -65,6 +69,13 @@ typedef enum {
     EAR_KIND_P4, EAR_KIND_P5,
     EAR_KIND_DIM, EAR_KIND_MIN, EAR_KIND_MAJ, EAR_KIND_AUG,
     EAR_KIND_MAJ7, EAR_KIND_DOM7,
+    // v1.9 L4/L5 kinds appended AFTER the existing set: kind indices are
+    // persisted in the NVS miss-count blob, so earlier indices must not move.
+    EAR_KIND_MIN6, EAR_KIND_MAJ6,      // wider intervals (8/9 semitones)
+    EAR_KIND_MIN7I, EAR_KIND_MAJ7I,    // 10/11 semitones (the I = interval;
+                                        // MAJ7 alone is the chord kind)
+    EAR_KIND_OCT,                      // perfect octave (12)
+    EAR_KIND_MIN7C,                    // minor seventh chord (0,3,7,10)
     EAR_KIND_COUNT
 } ear_kind_t;
 
@@ -81,9 +92,10 @@ typedef struct {
 extern const ear_kind_info_t EAR_KINDS[EAR_KIND_COUNT];
 
 // Level option tables: EAR_LEVELS[mode][level-1] = list of ear_kind_t values.
+// Quiz modes use 5 rows (v1.9); the SING row is unused (kept zeroed).
 #define EAR_OPTS_MAX 6
-extern const uint8_t EAR_LEVELS[EAR_MODE_COUNT][3][EAR_OPTS_MAX];
-extern const uint8_t EAR_LEVEL_OPT_COUNT[EAR_MODE_COUNT][3];
+extern const uint8_t EAR_LEVELS[EAR_MODE_COUNT][EAR_QUIZ_LEVEL_MAX][EAR_OPTS_MAX];
+extern const uint8_t EAR_LEVEL_OPT_COUNT[EAR_MODE_COUNT][EAR_QUIZ_LEVEL_MAX];
 
 // Interval playback direction (PRD 3.1, v1.6). Chord questions ignore it.
 // L1 draws UP only; L2 mixes UP/DOWN; L3 adds HARMONIC (both notes at
@@ -101,6 +113,8 @@ typedef struct {
     uint8_t root;             // MIDI root note 60..69 (C4..A4)
     ear_kind_t answer;        // correct kind (index into EAR_KINDS)
     ear_dir_t dir;            // interval playback direction (v1.6)
+    uint8_t inv;              // chord inversion rotation (v1.9 L5; 0 = root
+                              // position). Grading is quality-only either way.
     uint8_t options[EAR_OPTS_MAX];  // presented kinds (may repeat values
                               // across questions, never within one question)
 } ear_question_t;
@@ -108,7 +122,7 @@ typedef struct {
 // Quiz session state (10 questions per session).
 typedef struct {
     ear_mode_t mode;          // EAR_MODE_INTERVAL or EAR_MODE_CHORD
-    uint8_t level;            // 1..3
+    uint8_t level;            // 1..EAR_QUIZ_LEVEL_MAX
     uint8_t index;            // 0-based current question
     uint8_t score;            // correct answers so far
     uint8_t combo;            // consecutive correct (display only)
@@ -130,9 +144,11 @@ void ear_model_next_question(ear_session_t *s, ear_question_t *q);
 // Grade the user's choice (index into q->options). Returns true when the
 // choice is the answer. Updates score/combo/best_combo in *s.
 bool ear_model_grade(ear_session_t *s, const ear_question_t *q, uint8_t choice);
-// Level adjust at session end: >=8 correct -> +1 (max 3); <=4 -> -1 (min 1).
-// Returns the new level; *level_changed set accordingly.
-uint8_t auto_level_adjust(uint8_t old_level, uint8_t score, bool *changed);
+// Level adjust at session end: >=8 correct -> +1 (max level_max); <=4 -> -1
+// (min 1). Quiz modes pass EAR_QUIZ_LEVEL_MAX, pitch-flow modes pass
+// EAR_LEVEL_MAX. Returns the new level; *level_changed set accordingly.
+uint8_t auto_level_adjust(uint8_t old_level, uint8_t score, uint8_t level_max,
+                          bool *changed);
 // Session perfect bonus eligibility.
 bool ear_model_perfect(const ear_session_t *s);
 

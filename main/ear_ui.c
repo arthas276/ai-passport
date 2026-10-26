@@ -82,6 +82,7 @@ static uint8_t s_mode_card;
 // ---- LVGL objects per screen (only the active screen objects exist) ----
 static lv_obj_t *h_scr, *h_title, *h_batt, *h_pet, *h_bar, *h_xp_lbl;
 static lv_obj_t *h_mode_lbl, *h_hint;
+static lv_obj_t *h_stars[5];   // per-mode mastery pips (v1.9)
 static lv_obj_t *q_scr, *q_hdr, *q_status;
 static lv_obj_t *q_cells[EAR_OPTS_MAX], *q_cells_lbl[EAR_OPTS_MAX];
 static lv_obj_t *q_footer;
@@ -175,6 +176,23 @@ static void battery_text(char *out, size_t n) {
     }
 }
 
+// v1.9: per-mode mastery stars on HOME. One filled pip per level; slot count
+// is the mode's level ceiling (quiz modes 5, pitch-flow modes 3). Modes
+// without a level scale (duet / VS / setup) hide the row. Card indices match
+// MODE_NAMES: 0 INTERVAL 1 CHORD 2 SING 3 DUET 4 DICTATION 5 VS 6 RHYTHM
+// 7 SIGHTSING 8 SETUP.
+static void mode_levels(uint8_t card, uint8_t *lvl, uint8_t *max) {
+    switch (card) {
+    case 0: *lvl = s_save.ilvl; *max = EAR_QUIZ_LEVEL_MAX; return;
+    case 1: *lvl = s_save.clvl; *max = EAR_QUIZ_LEVEL_MAX; return;
+    case 2: *lvl = s_save.slvl; *max = EAR_LEVEL_MAX; return;
+    case 4: *lvl = s_save.dlvl; *max = EAR_LEVEL_MAX; return;
+    case 6: *lvl = s_save.rlvl; *max = EAR_LEVEL_MAX; return;
+    case 7: *lvl = s_save.vlvl; *max = EAR_LEVEL_MAX; return;
+    default: *lvl = 0; *max = 0; return;
+    }
+}
+
 // Refresh HOME dynamic parts (pet sprite, XP bar/text, mode card highlight).
 static void home_refresh(void) {
     ear_stage_t st = ear_pet_stage(s_save.xp);
@@ -193,6 +211,18 @@ static void home_refresh(void) {
              (unsigned long)ear_pet_xp_to_next(s_save.xp));
     lbl(h_xp_lbl, t, C_MUTED);
     if (h_mode_lbl) lbl(h_mode_lbl, MODE_NAMES[s_mode_card], C_GOLD);
+    uint8_t lvl = 0, lmax = 0;
+    mode_levels(s_mode_card, &lvl, &lmax);
+    for (int i = 0; i < 5; i++) {
+        if (!h_stars[i]) continue;
+        if (i < lmax) {
+            lv_obj_clear_flag(h_stars[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_bg_color(h_stars[i],
+                lv_color_hex(i < lvl ? C_GOLD : C_CARD), 0);
+        } else {
+            lv_obj_add_flag(h_stars[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 // Build (or rebuild) the HOME screen and load it.
@@ -235,6 +265,17 @@ static void enter_home(void) {
     h_mode_lbl = lv_label_create(h_scr);
     lv_obj_set_style_text_font(h_mode_lbl, &lv_font_montserrat_14, 0);
     lv_obj_align(h_mode_lbl, LV_ALIGN_TOP_MID, 0, 214);
+
+    // Mastery star row under the mode card (v1.9): filled = current level.
+    for (int i = 0; i < 5; i++) {
+        h_stars[i] = lv_obj_create(h_scr);
+        lv_obj_remove_style_all(h_stars[i]);
+        lv_obj_set_size(h_stars[i], 8, 8);
+        lv_obj_align(h_stars[i], LV_ALIGN_TOP_MID, -32 + i * 16, 236);
+        lv_obj_set_style_radius(h_stars[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(h_stars[i], LV_OPA_COVER, 0);
+        lv_obj_add_flag(h_stars[i], LV_OBJ_FLAG_HIDDEN);   // home_refresh fills
+    }
 
     // Evolve celebration: sprite swap happens in home_refresh; fanfare once.
     if (s_evolve_pending) {
@@ -306,7 +347,7 @@ static void quiz_load_question(void) {
     }
     quiz_refresh_hdr();
     lbl(q_status, "LISTEN...", C_CYAN);
-    ear_audio_play_question(s_q.root, s_q.answer, s_q.dir);
+    ear_audio_play_question(s_q.root, s_q.answer, s_q.dir, s_q.inv);
 }
 
 // Enter the quiz screen for a mode (INTERVAL or CHORD).
@@ -330,8 +371,11 @@ static void enter_quiz(ear_mode_t mode) {
     lv_obj_align(q_status, LV_ALIGN_TOP_MID, 0, 32);
 
     // Option cell layout per level (240 wide; two 100px columns + margins).
-    static const uint8_t LAYOUT[3][EAR_OPTS_MAX][2] = {
+    // v1.9: L4 reuses the 4-cell geometry, L5 the 6-cell geometry.
+    static const uint8_t LAYOUT[EAR_QUIZ_LEVEL_MAX][EAR_OPTS_MAX][2] = {
         {{36,120},{126,120}},
+        {{36,96},{126,96},{36,150},{126,150}},
+        {{36,84},{126,84},{36,138},{126,138},{36,192},{126,192}},
         {{36,96},{126,96},{36,150},{126,150}},
         {{36,84},{126,84},{36,138},{126,138},{36,192},{126,192}},
     };
@@ -400,7 +444,7 @@ static void quiz_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             return;
         }
         if (btn == BSP_BTN_UP && s_awaiting_answer) {
-            ear_audio_play_question(s_q.root, s_q.answer, s_q.dir);   // replay
+            ear_audio_play_question(s_q.root, s_q.answer, s_q.dir, s_q.inv);   // replay
         }
         return;
     }
@@ -442,7 +486,7 @@ static void grade_answer(void) {
                                     lv_color_hex(C_OK), 0);
     } else {
         ear_audio_play_cue(1);
-        ear_audio_play_question(s_q.root, s_q.answer, s_q.dir);   // teach: replay
+        ear_audio_play_question(s_q.root, s_q.answer, s_q.dir, s_q.inv);   // teach: replay
         char t[40];
         snprintf(t, sizeof(t), "ANSWER: %s", EAR_KINDS[s_q.answer].label);
         lbl(q_status, t, C_BAD);
@@ -995,7 +1039,7 @@ static void dict_next(void) {
     if (s_dict.index >= EAR_QUESTIONS_PER_SESSION) {
         bool changed = false;
         uint8_t new_lvl = auto_level_adjust(s_save.dlvl, s_dict.score,
-                                           &changed);
+                                           EAR_LEVEL_MAX, &changed);
         if (changed) s_save.dlvl = new_lvl;
         ear_store_save(&s_save);
         enter_result_common(s_dict.score, EAR_QUESTIONS_PER_SESSION, s_sess_xp);
@@ -1173,7 +1217,7 @@ static void rh_next(void) {
     if (s_rhy.index >= EAR_RHY_PATTERNS) {
         bool changed = false;
         uint8_t new_lvl = auto_level_adjust(s_save.rlvl, s_rhy.score,
-                                            &changed);
+                                            EAR_LEVEL_MAX, &changed);
         if (changed) s_save.rlvl = new_lvl;
         ear_store_save(&s_save);
         enter_result_common(s_rhy.score, EAR_RHY_PATTERNS, s_sess_xp);
@@ -1374,7 +1418,7 @@ static void ss_next(void) {
     if (s_ss.index >= EAR_QUESTIONS_PER_SESSION) {
         bool changed = false;
         uint8_t new_lvl = auto_level_adjust(s_save.vlvl, s_ss.score,
-                                            &changed);
+                                            EAR_LEVEL_MAX, &changed);
         if (changed) s_save.vlvl = new_lvl;
         ear_store_save(&s_save);
         enter_result_common(s_ss.score, EAR_QUESTIONS_PER_SESSION, s_sess_xp);
@@ -1510,7 +1554,8 @@ static void enter_result(void) {
     uint8_t old_lvl = (s_sess.mode == EAR_MODE_INTERVAL)
                     ? s_save.ilvl : s_save.clvl;
     bool changed = false;
-    uint8_t new_lvl = auto_level_adjust(old_lvl, s_sess.score, &changed);
+    uint8_t new_lvl = auto_level_adjust(old_lvl, s_sess.score,
+                                       EAR_QUIZ_LEVEL_MAX, &changed);
     if (changed) {
         if (s_sess.mode == EAR_MODE_INTERVAL) s_save.ilvl = new_lvl;
         else s_save.clvl = new_lvl;
