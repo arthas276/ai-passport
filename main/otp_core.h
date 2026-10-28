@@ -39,6 +39,11 @@ otp_status_t otp_base32_decode(const char *text, uint8_t *out, size_t out_cap, s
 /* Map bytes back to canonical Base32 for on-device confirmation. */
 otp_status_t otp_base32_encode(const uint8_t *in, size_t in_len, char *out, size_t out_cap);
 
+/* Copy in to out with one space after every four characters so a long Base32
+ * secret stays readable on the narrow screen. Returns the number of bytes
+ * written excluding the terminating NUL; output is truncated to cap-1. */
+size_t otp_base32_group(const char *in, char *out, size_t cap);
+
 /* Six-digit SHA-1 TOTP. now_sec is caller-owned because this board has no RTC;
  * the application supplies system time calibrated against a trusted device. */
 otp_status_t otp_totp(const uint8_t *secret, size_t secret_len,

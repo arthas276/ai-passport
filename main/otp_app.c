@@ -33,6 +33,8 @@ static const char SECRET_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 static otp_app_t s_app;
 static otp_power_t s_power;
+static otp_account_t s_verify;      /* 待确认的新账号：验码页 OK 后才入库 */
+static int8_t s_link_code_idx = -1; /* 联机页展示最后新增账号的当前码 */
 static volatile bool s_link_open;
 static TaskHandle_t s_link_task;
 static char s_link_last[48];
@@ -141,8 +143,13 @@ static void render_menu(void) {
 
 static void render_editor(bool secret) {
     lv_label_set_text(s_title, secret ? "输入密钥" : "输入名称");
-    const char *value = secret ? s_app.secret : s_app.name;
-    lv_label_set_text(s_body, value[0] ? value : "-");
+    if (secret) {
+        char grouped[80];
+        otp_base32_group(s_app.secret, grouped, sizeof(grouped));
+        lv_label_set_text(s_body, grouped[0] ? grouped : "-");
+    } else {
+        lv_label_set_text(s_body, s_app.name[0] ? s_app.name : "-");
+    }
     char current = secret ? SECRET_CHARS[s_app.cursor] : NAME_CHARS[s_app.cursor];
     lv_label_set_text_fmt(s_detail, "当前字符 %c", current);
     lv_label_set_text(s_footer, secret ? "OK添加  长按保存" : "OK添加  >完成");
@@ -155,6 +162,30 @@ static void render_clock(void) {
     lv_label_set_text(s_footer, "OK下一位  长按校验");
 }
 
+static void render_verify(void) {
+    lv_label_set_text(s_title, s_verify.name);
+    if (!s_app.store.clock_ready) {
+        lv_label_set_text(s_body, "------");
+        lv_label_set_text(s_detail, "未校正时间");
+    } else {
+        char code[OTP_DIGITS + 1u];
+        unsigned remain = 0;
+        uint64_t now = otp_store_now(&s_app.store);
+        if (otp_totp(s_verify.secret, s_verify.secret_len, now, s_verify.period,
+                     s_verify.digits, code, &remain) == OTP_OK) {
+            char shown[8];
+            snprintf(shown, sizeof(shown), "%c%c%c %c%c%c",
+                     code[0], code[1], code[2], code[3], code[4], code[5]);
+            lv_label_set_text(s_body, shown);
+            lv_label_set_text_fmt(s_detail, "剩余 %u 秒", remain);
+        } else {
+            lv_label_set_text(s_body, "错误");
+            lv_label_set_text(s_detail, "无法计算");
+        }
+    }
+    lv_label_set_text(s_footer, "OK保存  长按取消");
+}
+
 static void render_confirm(void) {
     lv_label_set_text(s_title, "确认删除");
     lv_label_set_text(s_body, s_app.store.count ? s_app.store.accounts[s_app.selected].name : "空列表");
@@ -164,6 +195,23 @@ static void render_confirm(void) {
 
 static void render_link(void) {
     lv_label_set_text(s_title, "电脑联机");
+    char body[64];
+    if (s_link_code_idx >= 0 && s_link_code_idx < (int8_t)s_app.store.count &&
+        s_app.store.clock_ready) {
+        const otp_account_t *account = &s_app.store.accounts[s_link_code_idx];
+        char code[OTP_DIGITS + 1u];
+        unsigned remain = 0;
+        uint64_t now = otp_store_now(&s_app.store);
+        if (otp_totp(account->secret, account->secret_len, now, account->period,
+                     account->digits, code, &remain) == OTP_OK) {
+            snprintf(body, sizeof(body), "%s\n%c%c%c %c%c%c", s_link_last,
+                     code[0], code[1], code[2], code[3], code[4], code[5]);
+            lv_label_set_text(s_body, body);
+            lv_label_set_text_fmt(s_detail, "剩余 %u 秒", remain);
+            lv_label_set_text(s_footer, "任意键关闭");
+            return;
+        }
+    }
     lv_label_set_text(s_body, s_link_count ? "USB 已开启" : "USB 已开启\n等待指令");
     lv_label_set_text(s_detail, s_link_last[0] ? s_link_last : "ADD/TIME/DEL/LIST");
     lv_label_set_text(s_footer, "任意键关闭");
@@ -186,6 +234,7 @@ static void render(void) {
     case OTP_SCREEN_SECRET: render_editor(true); break;
     case OTP_SCREEN_CLOCK: render_clock(); break;
     case OTP_SCREEN_CONFIRM: render_confirm(); break;
+    case OTP_SCREEN_VERIFY: render_verify(); break;
     case OTP_SCREEN_ERROR: render_error(); break;
     case OTP_SCREEN_LIST:
     default: render_list(); break;
@@ -221,15 +270,15 @@ static void open_error(const char *text) {
     set_status(text);
 }
 
-static bool finish_account(void) {
-    otp_account_t account;
-    otp_status_t status = otp_account_set(&account, s_app.name, s_app.secret);
-    if (status != OTP_OK) {
-        open_error("格式错误");
-        return false;
+static bool store_name_free(const char *name) {
+    for (uint8_t i = 0u; i < s_app.store.count; i++) {
+        if (strcmp(s_app.store.accounts[i].name, name) == 0) return false;
     }
-    status = otp_store_add(&s_app.store, &account);
-    memset(&account, 0, sizeof(account));
+    return true;
+}
+
+static bool commit_verify(void) {
+    otp_status_t status = otp_store_add(&s_app.store, &s_verify);
     if (status != OTP_OK) {
         open_error(status == OTP_ERR_FULL ? "已满" : "名称重复");
         return false;
@@ -239,8 +288,30 @@ static bool finish_account(void) {
         return false;
     }
     s_app.selected = (uint8_t)(s_app.store.count - 1u);
+    memset(&s_verify, 0, sizeof(s_verify));
     clear_draft();
     s_app.screen = OTP_SCREEN_LIST;
+    return true;
+}
+
+static bool finish_account(void) {
+    otp_status_t status = otp_account_set(&s_verify, s_app.name, s_app.secret);
+    if (status != OTP_OK) {
+        memset(&s_verify, 0, sizeof(s_verify));
+        open_error("格式错误");
+        return false;
+    }
+    if (s_app.store.count >= OTP_STORE_MAX || !store_name_free(s_verify.name)) {
+        memset(&s_verify, 0, sizeof(s_verify));
+        open_error(s_app.store.count >= OTP_STORE_MAX ? "已满" : "名称重复");
+        return false;
+    }
+    if (!s_app.store.clock_ready) {
+        /* 无时基时无法当场生成验证码，维持旧行为直接入库。 */
+        return commit_verify();
+    }
+    clear_draft();
+    s_app.screen = OTP_SCREEN_VERIFY;
     return true;
 }
 
@@ -338,6 +409,7 @@ static void link_write(const char *text) {
 /* 应用一条已解析的联机指令并应答;存储/UI 访问与按键处理同样在 LVGL 锁内。 */
 static void link_apply(const otp_link_msg_t *msg) {
     char reply[96];
+    s_link_code_idx = -1;
     switch (msg->cmd) {
     case OTP_LINK_CMD_ADD: {
         otp_status_t st = otp_store_add(&s_app.store, &msg->account);
@@ -346,6 +418,7 @@ static void link_apply(const otp_link_msg_t *msg) {
                      st == OTP_ERR_FULL ? "已满" : "名称重复");
         } else {
             s_app.selected = (uint8_t)(s_app.store.count - 1u);
+            s_link_code_idx = s_app.store.clock_ready ? (int8_t)(s_app.store.count - 1u) : -1;
             snprintf(reply, sizeof(reply), "OK ADD %s\n", msg->account.name);
             snprintf(s_link_last, sizeof(s_link_last), "新增 %s", msg->account.name);
         }
@@ -472,7 +545,8 @@ static void tick(lv_timer_t *timer) {
         s_soc_tick = 0u;
         battery_refresh();
     }
-    if (s_app.screen == OTP_SCREEN_LIST || s_app.screen == OTP_SCREEN_CODE) render();
+    if (s_app.screen == OTP_SCREEN_LIST || s_app.screen == OTP_SCREEN_CODE ||
+        s_app.screen == OTP_SCREEN_VERIFY || s_app.screen == OTP_SCREEN_LINK) render();
     if (otp_power_should_sleep(&s_power)) enter_sleep();
 }
 
@@ -488,6 +562,11 @@ static void handle_key(int button, int event) {
     if (event == BSP_BTN_LONG && button == BSP_BTN_OK) {
         if (s_app.screen == OTP_SCREEN_SECRET) finish_account();
         else if (s_app.screen == OTP_SCREEN_CLOCK) finish_clock();
+        else if (s_app.screen == OTP_SCREEN_VERIFY) {
+            memset(&s_verify, 0, sizeof(s_verify));
+            clear_draft();
+            s_app.screen = OTP_SCREEN_LIST;
+        }
         else if (s_app.screen == OTP_SCREEN_ERROR) s_app.screen = s_app.return_screen;
         else s_app.screen = OTP_SCREEN_LIST;
         render();
@@ -568,6 +647,9 @@ static void handle_key(int button, int event) {
             s_app.screen = OTP_SCREEN_LIST;
         }
         break;
+    case OTP_SCREEN_VERIFY:
+        if (button == BSP_BTN_OK) (void)commit_verify();
+        break;
     case OTP_SCREEN_LINK:
         link_stop();
         s_app.screen = OTP_SCREEN_LIST;
@@ -605,6 +687,8 @@ void otp_button_event(int button, int event) {
 
 esp_err_t otp_app_start(void) {
     memset(&s_app, 0, sizeof(s_app));
+    memset(&s_verify, 0, sizeof(s_verify));
+    s_link_code_idx = -1;
     otp_power_reset(&s_power);
     clear_draft();
     esp_err_t err = otp_store_load(&s_app.store);

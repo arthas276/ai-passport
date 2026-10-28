@@ -209,6 +209,24 @@ bool otp_code_equal(const char *left, const char *right) {
     return diff == 0u && left[OTP_DIGITS] == '\0' && right[OTP_DIGITS] == '\0';
 }
 
+size_t otp_base32_group(const char *in, char *out, size_t cap) {
+    if (!in || !out || cap == 0u) return 0u;
+    size_t written = 0u;
+    size_t since_space = 0u;
+    for (size_t i = 0u; in[i] != '\0'; ++i) {
+        if (written + 1u >= cap) break;
+        if (since_space == 4u) {
+            out[written++] = ' ';
+            since_space = 0u;
+            if (written + 1u >= cap) break;
+        }
+        out[written++] = in[i];
+        since_space++;
+    }
+    out[written] = '\0';
+    return written;
+}
+
 otp_status_t otp_account_set(otp_account_t *account, const char *name, const char *base32) {
     if (!account || !otp_name_valid(name)) return OTP_ERR_FORMAT;
     otp_account_t next;

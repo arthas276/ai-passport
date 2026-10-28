@@ -17,6 +17,7 @@ typedef enum {
     OTP_SCREEN_CLOCK,
     OTP_SCREEN_CONFIRM,
     OTP_SCREEN_LINK,
+    OTP_SCREEN_VERIFY,
     OTP_SCREEN_ERROR,
 } otp_screen_t;
 

@@ -71,9 +71,24 @@ static void test_period_math(void) {
     expect(otp_period_remaining(30ull, 30u) == 30u, "boundary remaining");
 }
 
+static void test_base32_group(void) {
+    char out[80];
+    expect(otp_base32_group("GEZDGNBVGY3TQOJQ", out, sizeof(out)) == 19u, "group length");
+    expect(strcmp(out, "GEZD GNBV GY3T QOJQ") == 0, "group spacing");
+    expect(otp_base32_group("ABC", out, sizeof(out)) == 3u && strcmp(out, "ABC") == 0,
+           "short secret needs no space");
+    expect(otp_base32_group("ABCDE", out, sizeof(out)) == 6u && strcmp(out, "ABCD E") == 0,
+           "tail group shorter than four");
+    char tiny[3];
+    expect(otp_base32_group("GEZDGNBV", tiny, sizeof(tiny)) == 2u && strcmp(tiny, "GE") == 0,
+           "truncation respects capacity");
+    expect(otp_base32_group("", out, sizeof(out)) == 0u && out[0] == '\0', "empty input");
+}
+
 int main(void) {
     test_rfc_vectors();
     test_base32_and_account();
+    test_base32_group();
     test_period_math();
     if (failures) {
         fprintf(stderr, "%d OTP tests failed\n", failures);
