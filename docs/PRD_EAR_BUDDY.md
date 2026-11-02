@@ -5,7 +5,17 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.9 (2026-10-26: quiz levels extend to five - L4 adds wider
+> PRD version: v1.10 (2026-11-02: replay discoverability for the quiz -
+> the bottom hint pill now names UPL REPLAY on every quiz screen and the
+> status line offers UPL REPLAY the moment playback ends unanswered
+> (community feedback 2026-10-31); visual polish pass - uniform 232x52
+> rounded hint pill on every screen with a 204 px per-line text budget
+> enforced by tests/test_hint_budget.py (replaces bare bottom labels whose
+> SETUP/RESET lines overflowed the 240 px panel), HOME mode card becomes a
+> gold-bordered rounded card holding the name + mastery stars, quiz option
+> cells gain corner radius and a filled cursor highlight, and the option
+> grid resets its grading colors when the next question loads; see 5);
+> v1.9 (2026-10-26: quiz levels extend to five - L4 adds wider
 > intervals (m6/M6) and the minor-seventh chord m7c, L5 adds m7/M7/P8 and
 > chord inversions (voicing rotated, graded on quality only); per-mode
 > mastery stars on HOME; ilvl/clvl range 1-5 while pitch-flow modes keep
@@ -248,17 +258,24 @@ HOME
 - center: pet sprite 48x48 + XP bar (180x10) + "LV n cur/next" text
 - bottom: mode card cycling INTERVAL / CHORD / SING / DUET / DICTATION /
   VS BATTLE / RHYTHM / SIGHTSING / SETUP via UP/DOWN (v1.3 adds DUET; v1.4
-  adds DICTATION; v1.7 adds VS BATTLE; v1.8 adds RHYTHM and SIGHTSING)
-- mastery star row under the mode card (v1.9): one lit pip per level
+  adds DICTATION; v1.7 adds VS BATTLE; v1.8 adds RHYTHM and SIGHTSING);
+  v1.10 renders the card as a 216x64 rounded panel with a gold border
+  holding the mode name and its stars
+- mastery star row inside the mode card (v1.9, repositioned v1.10): one
+  lit pip per level
   reached; slot count follows the mode's level ceiling (quiz modes 5,
   leveled pitch-flow modes 3; DUET/VS/SETUP show no stars)
 - UP/DOWN click: switch mode card; OK click: enter mode; OK long: nothing
 
 QUIZ (solo and VS)
 - header "Q 3/10 LV2"; VS header "Q 4/10 P2 3:2" (gold, v1.7); status
-  "LISTEN..." during playback
-- options grid: 2 / 4 / 6 cells (100x44 each), cursor highlight
-- footer hints "OK CONFIRM - UPL REPLAY - OKL QUIT" (Montserrat 14)
+  "LISTEN..." during playback, then "UPL REPLAY" once playback ends
+  without an answer (v1.10; the question used to play exactly once with
+  no on-screen way back)
+- options grid: 2 / 4 / 6 cells (100x44 each, rounded corners v1.10),
+  cursor highlight = cyan border + filled cell (v1.10)
+- footer hint pill "UPL REPLAY  OK CONFIRM / OKL QUIT" (Montserrat 14,
+  pill v1.10)
 - UP long: replay question; OK long: quit session (earned XP stays);
   combo >= 3 shown in header
 - wrong answer: correct cell highlights 1.5 s with replay, then next
@@ -301,7 +318,11 @@ SETUP
   HOME, any key cancels; page added v1.5)
 - battery top-right
 
-Global: 10 s idle -> backlight 30%; any key -> 100%. Implemented in ear_ui.
+Global: every screen ends in a 232x52 rounded hint pill (C_CARD fill,
+  C_PILL_BR border) holding one or two centered Montserrat-14 lines; each
+  line is capped at 204 px by tests/test_hint_budget.py, which freezes the
+  font advance table (v1.10). 10 s idle -> backlight 30%; any key -> 100%.
+Implemented in ear_ui.
 
 ## 6. Button Map (uniform)
 
