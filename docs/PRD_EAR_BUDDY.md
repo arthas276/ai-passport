@@ -5,7 +5,11 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.10 (2026-11-02: replay discoverability for the quiz -
+> PRD version: v1.10.1 (2026-11-02: stability hotfix - LVGL now draws from
+> the system heap instead of the 24 KB built-in pool, which exhausted at
+> screen-transition peaks (finishing a DICTATION round froze the device in
+> the LVGL malloc assert); every screen entry logs free-heap watermarks);
+> v1.10 (2026-11-02: replay discoverability for the quiz -
 > the bottom hint pill now names UPL REPLAY on every quiz screen and the
 > status line offers UPL REPLAY the moment playback ends unanswered
 > (community feedback 2026-10-31); visual polish pass - uniform 232x52
