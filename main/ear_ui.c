@@ -23,6 +23,8 @@ static const char *TAG = "ear_ui";   // duet diagnostics via serial_peek
 #define C_BG     0x1B263B   // dark navy background
 #define C_CARD   0x24344D   // panels/cards
 #define CELL_BG  0x2C3E5F   // quiz option cells
+#define CELL_SEL  0x3A5170   // quiz option cell, cursor-selected fill
+#define C_PILL_BR 0x3A4C6E   // hint pill border
 #define C_TEXT   0xFFFFFF
 #define C_MUTED  0x8D99AE
 #define C_OK     0x2ECC71
@@ -81,6 +83,7 @@ static uint8_t s_mode_card;
 
 // ---- LVGL objects per screen (only the active screen objects exist) ----
 static lv_obj_t *h_scr, *h_title, *h_batt, *h_pet, *h_bar, *h_xp_lbl;
+static lv_obj_t *h_mode_card;   // rounded mode card (name + mastery stars)
 static lv_obj_t *h_mode_lbl, *h_hint;
 static lv_obj_t *h_stars[5];   // per-mode mastery pips (v1.9)
 static lv_obj_t *q_scr, *q_hdr, *q_status;
@@ -108,6 +111,48 @@ static void lbl(lv_obj_t *obj, const char *text, uint32_t color) {
 
 static int clampi(int v, int lo, int hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Bottom hint pill: 232x52 rounded bar, one or two centered lines of
+// montserrat_14. Every line must stay inside the 204 px text budget;
+// tests/test_hint_budget.py freezes the font advance table and re-measures
+// each hint_pill_set line against it.
+#define HINT_PILL_W 232
+#define HINT_PILL_H 52
+static lv_obj_t *hint_pill_create(lv_obj_t *parent) {
+    lv_obj_t *pill = lv_obj_create(parent);
+    lv_obj_remove_style_all(pill);
+    lv_obj_set_size(pill, HINT_PILL_W, HINT_PILL_H);
+    lv_obj_align(pill, LV_ALIGN_BOTTOM_MID, 0, -7);
+    lv_obj_set_style_radius(pill, HINT_PILL_H / 2, 0);
+    lv_obj_set_style_bg_color(pill, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(pill, 2, 0);
+    lv_obj_set_style_border_color(pill, lv_color_hex(C_PILL_BR), 0);
+    lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *label = lv_label_create(pill);
+    lv_obj_remove_style_all(label);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(C_MUTED), 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(label, HINT_PILL_W - 16);
+    lv_obj_center(label);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    return pill;
+}
+
+// l2 NULL = single centered line; otherwise l1 over l2.
+static void hint_pill_set(lv_obj_t *pill, const char *l1, const char *l2) {
+    if (!pill) return;
+    lv_obj_t *label = lv_obj_get_child(pill, 0);
+    if (!label) return;
+    if (l2) {
+        char t[96];
+        snprintf(t, sizeof(t), "%s\n%s", l1, l2);
+        lv_label_set_text(label, t);
+    } else {
+        lv_label_set_text(label, l1);
+    }
 }
 
 // Add XP, persist immediately (no-punishment: only ever positive), and flag
@@ -256,22 +301,35 @@ static void enter_home(void) {
     lv_obj_set_size(h_bar, 180, 10);
     lv_obj_align(h_bar, LV_ALIGN_TOP_MID, 0, 130);
     lv_obj_set_style_bg_color(h_bar, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_radius(h_bar, 5, 0);
     lv_obj_set_style_bg_color(h_bar, lv_color_hex(C_OK), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(h_bar, 5, LV_PART_INDICATOR);
 
     h_xp_lbl = lv_label_create(h_scr);
     lv_obj_set_style_text_font(h_xp_lbl, &lv_font_montserrat_14, 0);
     lv_obj_align(h_xp_lbl, LV_ALIGN_TOP_MID, 0, 148);
 
-    h_mode_lbl = lv_label_create(h_scr);
-    lv_obj_set_style_text_font(h_mode_lbl, &lv_font_montserrat_14, 0);
-    lv_obj_align(h_mode_lbl, LV_ALIGN_TOP_MID, 0, 214);
+    h_mode_card = lv_obj_create(h_scr);
+    lv_obj_remove_style_all(h_mode_card);
+    lv_obj_set_size(h_mode_card, 216, 64);
+    lv_obj_align(h_mode_card, LV_ALIGN_TOP_MID, 0, 188);
+    lv_obj_set_style_radius(h_mode_card, 14, 0);
+    lv_obj_set_style_bg_color(h_mode_card, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_bg_opa(h_mode_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(h_mode_card, 2, 0);
+    lv_obj_set_style_border_color(h_mode_card, lv_color_hex(C_GOLD), 0);
+    lv_obj_clear_flag(h_mode_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Mastery star row under the mode card (v1.9): filled = current level.
+    h_mode_lbl = lv_label_create(h_mode_card);
+    lv_obj_set_style_text_font(h_mode_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_align(h_mode_lbl, LV_ALIGN_TOP_MID, 0, 12);
+
+    // Mastery star row inside the mode card (v1.9): filled = current level.
     for (int i = 0; i < 5; i++) {
-        h_stars[i] = lv_obj_create(h_scr);
+        h_stars[i] = lv_obj_create(h_mode_card);
         lv_obj_remove_style_all(h_stars[i]);
         lv_obj_set_size(h_stars[i], 8, 8);
-        lv_obj_align(h_stars[i], LV_ALIGN_TOP_MID, -32 + i * 16, 236);
+        lv_obj_align(h_stars[i], LV_ALIGN_TOP_MID, -32 + i * 16, 40);
         lv_obj_set_style_radius(h_stars[i], LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(h_stars[i], LV_OPA_COVER, 0);
         lv_obj_add_flag(h_stars[i], LV_OBJ_FLAG_HIDDEN);   // home_refresh fills
@@ -283,11 +341,8 @@ static void enter_home(void) {
         ear_audio_play_cue(2);
     }
 
-    h_hint = lv_label_create(h_scr);
-    lv_obj_set_style_text_font(h_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(h_hint, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(h_hint, LV_ALIGN_BOTTOM_MID, 0, -14);
-    lv_label_set_text(h_hint, "UP/DOWN MODE  OK START");
+    h_hint = hint_pill_create(h_scr);
+    hint_pill_set(h_hint, "UP/DOWN MODE", "OK START");
     lv_screen_load(h_scr);
     home_refresh();
 }
@@ -300,6 +355,8 @@ static void quiz_grid_refresh(void) {
         if (!q_cells[i]) continue;
         lv_obj_set_style_border_color(q_cells[i], lv_color_hex(
             i == s_cursor ? C_CYAN : C_CARD), 0);
+        lv_obj_set_style_bg_color(q_cells[i], lv_color_hex(
+            i == s_cursor ? CELL_SEL : CELL_BG), 0);
     }
 }
 
@@ -347,6 +404,7 @@ static void quiz_load_question(void) {
     }
     quiz_refresh_hdr();
     lbl(q_status, "LISTEN...", C_CYAN);
+    quiz_grid_refresh();   // reset cursor fill + clear the previous grading colors
     ear_audio_play_question(s_q.root, s_q.answer, s_q.dir, s_q.inv);
 }
 
@@ -387,6 +445,7 @@ static void enter_quiz(ear_mode_t mode) {
         lv_obj_set_style_bg_color(q_cells[i], lv_color_hex(CELL_BG), 0);
         lv_obj_set_style_border_width(q_cells[i], 2, 0);
         lv_obj_set_style_border_color(q_cells[i], lv_color_hex(C_CARD), 0);
+        lv_obj_set_style_radius(q_cells[i], 12, 0);
         lv_obj_clear_flag(q_cells[i], LV_OBJ_FLAG_SCROLLABLE);
 
         q_cells_lbl[i] = lv_label_create(q_cells[i]);
@@ -397,11 +456,8 @@ static void enter_quiz(ear_mode_t mode) {
     // Cells beyond the level count start hidden; grid_build manages this.
     quiz_grid_build();
 
-    q_footer = lv_label_create(q_scr);
-    lv_obj_set_style_text_font(q_footer, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(q_footer, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(q_footer, LV_ALIGN_BOTTOM_MID, 0, -12);
-    lv_label_set_text(q_footer, "UP/DOWN SELECT  OK CONFIRM");
+    q_footer = hint_pill_create(q_scr);
+    hint_pill_set(q_footer, "UPL REPLAY  OK CONFIRM", "OKL QUIT");
     lv_screen_load(q_scr);
     quiz_load_question();
 }
@@ -445,6 +501,7 @@ static void quiz_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         }
         if (btn == BSP_BTN_UP && s_awaiting_answer) {
             ear_audio_play_question(s_q.root, s_q.answer, s_q.dir, s_q.inv);   // replay
+            lbl(q_status, "LISTEN...", C_CYAN);
         }
         return;
     }
@@ -512,7 +569,7 @@ static void quiz_audio(ear_audio_event_t *ev) {
             s_advancing = false;
             quiz_advance();
         } else {
-            lbl(q_status, "", C_TEXT);
+            lbl(q_status, "UPL REPLAY", C_CYAN);
             quiz_grid_refresh();
         }
     }
@@ -561,11 +618,8 @@ static void enter_sing(void) {
     sg_status = lv_label_create(sg_scr);
     lv_obj_set_style_text_font(sg_status, &lv_font_montserrat_14, 0);
     lv_obj_align(sg_status, LV_ALIGN_TOP_MID, 0, 190);
-    sg_hint = lv_label_create(sg_scr);
-    lv_obj_set_style_text_font(sg_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(sg_hint, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(sg_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
-    lv_label_set_text(sg_hint, "OK START  UP REPLAY  OKL EXIT");
+    sg_hint = hint_pill_create(sg_scr);
+    hint_pill_set(sg_hint, "OK START  UP REPLAY", "OKL EXIT");
     lv_screen_load(sg_scr);
     s_sing_index = 1;
     s_sing_score = 0;
@@ -709,7 +763,7 @@ static void duet_refresh_ready(void) {
     lbl(d_notes, "SING A PHRASE 2-4s", C_TEXT);
     lbl(d_key, "", C_MUTED);
     lbl(d_status, "", C_TEXT);
-    lbl(d_hint, "OK SING  OKL EXIT", C_MUTED);
+    hint_pill_set(d_hint, "OK SING  OKL EXIT", NULL);
     lv_image_set_src(d_pet,
         &EAR_PET_IMG[ear_pet_stage(s_save.xp)][0]);
     lv_obj_set_y(d_pet, 84);
@@ -743,12 +797,9 @@ static void enter_duet(void) {
 
     d_status = lv_label_create(d_scr);
     lv_obj_set_style_text_font(d_status, &lv_font_montserrat_20, 0);
-    lv_obj_align(d_status, LV_ALIGN_TOP_MID, 0, 240);
+    lv_obj_align(d_status, LV_ALIGN_TOP_MID, 0, 228);
 
-    d_hint = lv_label_create(d_scr);
-    lv_obj_set_style_text_font(d_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(d_hint, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(d_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    d_hint = hint_pill_create(d_scr);
     lv_screen_load(d_scr);
     s_duet_pet_frame = 0;
     duet_refresh_ready();
@@ -786,7 +837,7 @@ static void duet_review(void) {
                  (unsigned)s_duet_harmony[i]);
     }
     lbl(d_status, "", C_TEXT);
-    lbl(d_hint, "OK PLAY UP RESING OKL EXIT", C_MUTED);
+    hint_pill_set(d_hint, "OK PLAY  UP RESING", "OKL EXIT");
     s_duet_state = DUET_REVIEW;
 }
 
@@ -803,7 +854,7 @@ static void duet_key_ev(bsp_btn_t btn, bsp_btn_ev_t ev) {
         ear_audio_duet_capture();   // re-sing the phrase
         s_duet_state = DUET_LISTEN;
         lbl(d_status, "SING AGAIN 2-4s", C_GOLD);
-        lbl(d_hint, "OKL EXIT", C_MUTED);
+        hint_pill_set(d_hint, "OKL EXIT", NULL);
         return;
     }
     if (btn != BSP_BTN_OK) return;
@@ -812,12 +863,12 @@ static void duet_key_ev(bsp_btn_t btn, bsp_btn_ev_t ev) {
         ear_audio_duet_capture();
         s_duet_state = DUET_LISTEN;
         lbl(d_status, "SING NOW 2-4s", C_GOLD);
-        lbl(d_hint, "OKL EXIT", C_MUTED);
+        hint_pill_set(d_hint, "OKL EXIT", NULL);
         break;
     case DUET_REVIEW:
         s_duet_state = DUET_PLAY;
         lbl(d_status, "DUET...", C_CYAN);
-        lbl(d_hint, "OKL EXIT", C_MUTED);
+        hint_pill_set(d_hint, "OKL EXIT", NULL);
         ear_audio_duet_play(ear_audio_duet_phrase(), s_duet_harmony);
         break;
     case DUET_DONE:
@@ -844,7 +895,7 @@ static void duet_audio_ev(ear_audio_event_t *ev) {
     if (ev->kind == EAR_AUDIO_EV_DUET_PHRASE) {
         if (ev->pct < EAR_DUET_MIN_NOTES) {
             lbl(d_status, "TOO SHORT", C_BAD);
-            lbl(d_hint, "OK RETRY  OKL EXIT", C_MUTED);
+            hint_pill_set(d_hint, "OK RETRY  OKL EXIT", NULL);
             s_duet_state = DUET_READY;   // OK restarts the capture
             return;
         }
@@ -871,7 +922,7 @@ static void duet_audio_ev(ear_audio_event_t *ev) {
         snprintf(t, sizeof(t), "+%u XP  DUETS %lu", (unsigned)EAR_XP_DUET,
                  (unsigned long)s_save.duets);
         lbl(d_status, t, C_OK);
-        lbl(d_hint, "OK NEXT ROUND", C_MUTED);
+        hint_pill_set(d_hint, "OK NEXT ROUND", NULL);
         s_duet_state = DUET_DONE;
         ear_audio_play_cue(0);
     }
@@ -936,7 +987,7 @@ static void dict_refresh_ready(void) {
     lbl(dc_notes, mbuf, C_TEXT);
     lbl(dc_sung, "", C_MUTED);
     lbl(dc_status, "LISTEN", C_CYAN);
-    lbl(dc_hint, "OK LISTEN  OKL EXIT", C_MUTED);
+    hint_pill_set(dc_hint, "OK LISTEN  OKL EXIT", NULL);
     s_dict_pet_frame = 0;
     lv_image_set_src(dc_pet, &EAR_PET_IMG[ear_pet_stage(s_save.xp)][0]);
     lv_obj_set_y(dc_pet, 70);
@@ -946,7 +997,7 @@ static void dict_refresh_ready(void) {
 static void dict_start_listen(void) {
     s_dict_state = DICT_LISTEN;
     lbl(dc_status, "LISTEN...", C_CYAN);
-    lbl(dc_hint, "OKL EXIT", C_MUTED);
+    hint_pill_set(dc_hint, "OKL EXIT", NULL);
     ear_audio_play_melody(s_dict_mel.notes, s_dict_mel.count,
                           EAR_DICTATION_NOTE_MS[s_dict.level - 1]);
 }
@@ -956,7 +1007,7 @@ static void dict_show_echo(void) {
     s_dict_state = DICT_ECHO;
     lbl(dc_sung, "", C_MUTED);
     lbl(dc_status, "SING IT BACK", C_GOLD);
-    lbl(dc_hint, "OK SING  UP REPLAY  OKL EXIT", C_MUTED);
+    hint_pill_set(dc_hint, "OK SING  UP REPLAY", "OKL EXIT");
 }
 
 // SING: capture the sung-back melody (duet chain), grade on phrase end.
@@ -965,7 +1016,7 @@ static void dict_show_echo(void) {
 static void dict_start_sing(void) {
     s_dict_state = DICT_SING;
     lbl(dc_status, "SING NOW", C_GOLD);
-    lbl(dc_hint, "OKL EXIT", C_MUTED);
+    hint_pill_set(dc_hint, "OKL EXIT", NULL);
     ear_audio_dict_capture(s_dict_mel.count);
 }
 
@@ -978,7 +1029,7 @@ static void dict_grade(void) {
     const ear_duet_phrase_t *sung = ear_audio_dict_phrase();
     if (sung->count < EAR_DICTATION_MIN_NOTES) {
         lbl(dc_status, "TOO SHORT", C_BAD);
-        lbl(dc_hint, "OK RETRY  OKL EXIT", C_MUTED);
+        hint_pill_set(dc_hint, "OK RETRY  OKL EXIT", NULL);
         lbl(dc_sung, "", C_MUTED);
         s_dict_state = DICT_ECHO;
         return;
@@ -1029,7 +1080,7 @@ static void dict_grade(void) {
         lbl(dc_status, t, C_BAD);
         ear_audio_play_cue(1);
     }
-    lbl(dc_hint, "OK NEXT", C_MUTED);
+    hint_pill_set(dc_hint, "OK NEXT", NULL);
     s_dict_state = DICT_GRADE;
 }
 
@@ -1086,10 +1137,7 @@ static void enter_dictation(void) {
     lv_obj_set_style_text_font(dc_status, &lv_font_montserrat_20, 0);
     lv_obj_align(dc_status, LV_ALIGN_TOP_MID, 0, 210);
 
-    dc_hint = lv_label_create(dc_scr);
-    lv_obj_set_style_text_font(dc_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(dc_hint, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(dc_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    dc_hint = hint_pill_create(dc_scr);
     lv_screen_load(dc_scr);
     ear_dictation_session_init(&s_dict, s_save.dlvl, esp_random());
     ear_dictation_next_melody(&s_dict, &s_dict_mel);
@@ -1173,7 +1221,7 @@ static void rh_refresh_ready(void) {
     lbl(rh_prog, p, C_MUTED);
     lbl(rh_taps_lbl, "", C_MUTED);
     lbl(rh_status, "READY", C_CYAN);
-    lbl(rh_hint, "OK PLAY  UPL REPLAY  OKL EXIT", C_MUTED);
+    hint_pill_set(rh_hint, "OK PLAY  UPL REPLAY", "OKL EXIT");
 }
 
 static void rh_start_play(void) {
@@ -1182,7 +1230,7 @@ static void rh_start_play(void) {
     s_rh_vcur.next_slot = 0;
     s_rh_fb[0] = '\0';
     lbl(rh_status, "COUNT IN...", C_CYAN);
-    lbl(rh_hint, "OKL EXIT", C_MUTED);
+    hint_pill_set(rh_hint, "OKL EXIT", NULL);
     ear_audio_play_rhythm(s_rh_pat.onsets,
                           EAR_RHY_BEAT_MS[s_rhy.level - 1]);
 }
@@ -1252,10 +1300,7 @@ static void enter_rhythm(void) {
     lv_label_set_recolor(rh_taps_lbl, true);   // per-tap verdict colors
     lv_obj_align(rh_taps_lbl, LV_ALIGN_TOP_MID, 0, 165);
 
-    rh_hint = lv_label_create(rh_scr);
-    lv_obj_set_style_text_font(rh_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(rh_hint, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(rh_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    rh_hint = hint_pill_create(rh_scr);
     lv_screen_load(rh_scr);
     ear_rhythm_session_init(&s_rhy, s_save.rlvl, esp_random());
     ear_rhythm_next_pattern(&s_rhy, &s_rh_pat);
@@ -1336,26 +1381,26 @@ static void ss_refresh_ready(void) {
     lbl(ss_notes, mbuf, C_TEXT);
     lbl(ss_sung, "", C_MUTED);
     lbl(ss_status, "READ + SING", C_CYAN);
-    lbl(ss_hint, "OK START NOTE  OKL EXIT", C_MUTED);
+    hint_pill_set(ss_hint, "OK START NOTE  OKL EXIT", NULL);
 }
 
 static void ss_start_note(void) {
     s_ss_state = SS_STARTNOTE;
     lbl(ss_status, "START NOTE...", C_CYAN);
-    lbl(ss_hint, "OKL EXIT", C_MUTED);
+    hint_pill_set(ss_hint, "OKL EXIT", NULL);
     ear_audio_play_target(s_ss_mel.notes[0]);
 }
 
 static void ss_show_wait(void) {
     s_ss_state = SS_WAIT;
     lbl(ss_status, "SING WHEN READY", C_GOLD);
-    lbl(ss_hint, "OK SING  UPL RE-NOTE  OKL EXIT", C_MUTED);
+    hint_pill_set(ss_hint, "OK SING  UPL RE-NOTE", "OKL EXIT");
 }
 
 static void ss_start_sing(void) {
     s_ss_state = SS_SING;
     lbl(ss_status, "SING NOW", C_GOLD);
-    lbl(ss_hint, "OKL EXIT", C_MUTED);
+    hint_pill_set(ss_hint, "OKL EXIT", NULL);
     ear_audio_dict_capture(s_ss_mel.count);
 }
 
@@ -1365,7 +1410,7 @@ static void ss_grade(void) {
     const ear_duet_phrase_t *sung = ear_audio_dict_phrase();
     if (sung->count < EAR_DICTATION_MIN_NOTES) {
         lbl(ss_status, "TOO SHORT", C_BAD);
-        lbl(ss_hint, "OK RETRY  OKL EXIT", C_MUTED);
+        hint_pill_set(ss_hint, "OK RETRY  OKL EXIT", NULL);
         s_ss_state = SS_WAIT;
         return;
     }
@@ -1409,7 +1454,7 @@ static void ss_grade(void) {
         lbl(ss_status, t, C_BAD);
         ear_audio_play_cue(1);
     }
-    lbl(ss_hint, "OK NEXT", C_MUTED);
+    hint_pill_set(ss_hint, "OK NEXT", NULL);
     s_ss_state = SS_GRADE;
 }
 
@@ -1460,10 +1505,7 @@ static void enter_sightsing(void) {
     lv_obj_set_style_text_font(ss_status, &lv_font_montserrat_20, 0);
     lv_obj_align(ss_status, LV_ALIGN_TOP_MID, 0, 210);
 
-    ss_hint = lv_label_create(ss_scr);
-    lv_obj_set_style_text_font(ss_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(ss_hint, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(ss_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+    ss_hint = hint_pill_create(ss_scr);
     lv_screen_load(ss_scr);
     ear_dictation_session_init(&s_ss, s_save.vlvl, esp_random());
     ear_dictation_next_melody(&s_ss, &s_ss_mel);
@@ -1644,11 +1686,8 @@ static void enter_setup(void) {
     s1_batt = lv_label_create(s1_scr);
     lv_obj_set_style_text_font(s1_batt, &lv_font_montserrat_14, 0);
     lv_obj_align(s1_batt, LV_ALIGN_TOP_MID, 0, 170);
-    s1_hint = lv_label_create(s1_scr);
-    lv_obj_set_style_text_font(s1_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s1_hint, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(s1_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
-    lv_label_set_text(s1_hint, "UP/DOWN VOLUME  OK BACK  OKL RESET");
+    s1_hint = hint_pill_create(s1_scr);
+    hint_pill_set(s1_hint, "UP/DOWN VOLUME", "OK BACK  OKL RESET");
     lv_screen_load(s1_scr);
     setup_refresh();
 }
@@ -1679,11 +1718,8 @@ static void enter_reset_confirm(void) {
     lv_obj_align(rs_warn, LV_ALIGN_TOP_MID, 0, 140);
     lbl(rs_warn, "XP, GROWTH AND STATS\nWILL BE ERASED", C_MUTED);
 
-    rs_hint = lv_label_create(rs_scr);
-    lv_obj_set_style_text_font(rs_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(rs_hint, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(rs_hint, LV_ALIGN_BOTTOM_MID, 0, -12);
-    lv_label_set_text(rs_hint, "HOLD OK = RESET  ANY KEY = CANCEL");
+    rs_hint = hint_pill_create(rs_scr);
+    hint_pill_set(rs_hint, "HOLD OK = RESET", "ANY KEY = CANCEL");
     lv_screen_load(rs_scr);
 }
 
