@@ -12,6 +12,7 @@
 #include "bsp_audio.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
@@ -111,6 +112,14 @@ static void lbl(lv_obj_t *obj, const char *text, uint32_t color) {
 
 static int clampi(int v, int lo, int hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Screen-transition heap watermark: the 2026-11-02 freeze was an LVGL
+// pool exhaustion 28 min into a session, invisible until it trapped.
+static void log_heap(const char *where) {
+    ESP_LOGI(TAG, "heap %s: free=%u largest=%u", where,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 }
 
 // Bottom hint pill: 232x52 rounded bar, one or two centered lines of
@@ -345,6 +354,7 @@ static void enter_home(void) {
     hint_pill_set(h_hint, "UP/DOWN MODE", "OK START");
     lv_screen_load(h_scr);
     home_refresh();
+    log_heap("home");
 }
 
 // ---- QUIZ ----
@@ -460,6 +470,7 @@ static void enter_quiz(ear_mode_t mode) {
     hint_pill_set(q_footer, "UPL REPLAY  OK CONFIRM", "OKL QUIT");
     lv_screen_load(q_scr);
     quiz_load_question();
+    log_heap("quiz");
 }
 
 // ---- VS BATTLE (v1.7) ----
@@ -633,6 +644,7 @@ static void enter_sing(void) {
              ear_note_name(s_sing_target));
     lbl(sg_note, t, C_GOLD);
     lbl(sg_status, "LISTEN TO TARGET", C_CYAN);
+    log_heap("sing");
 }
 
 // Advance the sing session: next of 5 notes, or the shared result page.
@@ -803,6 +815,7 @@ static void enter_duet(void) {
     lv_screen_load(d_scr);
     s_duet_pet_frame = 0;
     duet_refresh_ready();
+    log_heap("duet");
 }
 
 // Transcription + key into the REVIEW labels; harmony precomputed here so
@@ -1144,6 +1157,7 @@ static void enter_dictation(void) {
     s_sess_xp = 0;                    // dictation result reports its own XP
     s_dict_pet_frame = 0;
     dict_refresh_ready();
+    log_heap("dict");
 }
 
 // Dictation keys: OKL always exits (earned XP stays); state-dependent OK/UP.
@@ -1307,6 +1321,7 @@ static void enter_rhythm(void) {
     s_sess_xp = 0;
     s_rh_advancing = false;
     rh_refresh_ready();
+    log_heap("rhythm");
 }
 
 static void rh_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
@@ -1511,6 +1526,7 @@ static void enter_sightsing(void) {
     ear_dictation_next_melody(&s_ss, &s_ss_mel);
     s_sess_xp = 0;
     ss_refresh_ready();
+    log_heap("sightsing");
 }
 
 static void ss_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
@@ -1584,6 +1600,7 @@ static void enter_vs_result(void) {
     snprintf(t, sizeof(t), "+%lu XP", (unsigned long)s_sess_xp);
     lbl(r_tot, t, C_GOLD);
     lv_screen_load(r_scr);
+    log_heap("vs-result");
 }
 
 // Quiz session end: perfect bonus + auto level adjust, then the shared
@@ -1638,6 +1655,7 @@ static void enter_result_common(uint8_t score, uint8_t total, uint32_t xp) {
              (unsigned)s_save.best_combo);
     lbl(r_tot, t, C_MUTED);
     lv_screen_load(r_scr);
+    log_heap("result");
 }
 
 // RESULT: any OK press returns to HOME (evolve fanfare fires there).
@@ -1690,6 +1708,7 @@ static void enter_setup(void) {
     hint_pill_set(s1_hint, "UP/DOWN VOLUME", "OK BACK  OKL RESET");
     lv_screen_load(s1_scr);
     setup_refresh();
+    log_heap("setup");
 }
 
 // ---- RESET confirm page ----
@@ -1721,6 +1740,7 @@ static void enter_reset_confirm(void) {
     rs_hint = hint_pill_create(rs_scr);
     hint_pill_set(rs_hint, "HOLD OK = RESET", "ANY KEY = CANCEL");
     lv_screen_load(rs_scr);
+    log_heap("reset");
 }
 
 // RESET CONFIRM keys: a second OK hold within 5 s executes the wipe; any

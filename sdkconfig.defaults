@@ -24,9 +24,10 @@ CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_DEF_REFR_PERIOD=20
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
-# LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
-CONFIG_LV_MEM_SIZE_KILOBYTES=24
+# LVGL malloc 走系统堆（~130KB 可用）：v1.10 UI（提示胶囊/模式卡）在 24KB 内置池上
+# 峰值溢出，分配失败落入 LVGL 断言 while(1) 死循环（真机 2026-11-02 冻结：
+# dictation 结束进 RESULT 绘制胶囊边框时 400B 圆角蒙版表分配失败）。
+CONFIG_LV_USE_CLIB_MALLOC=y
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
