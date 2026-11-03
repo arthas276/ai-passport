@@ -8,6 +8,8 @@
 static const breath_pattern_t *flow = &BREATH_PATTERNS[0];
 static const breath_pattern_t *calm = &BREATH_PATTERNS[1];
 static const breath_pattern_t *box = &BREATH_PATTERNS[2];
+static const breath_pattern_t *sleep = &BREATH_PATTERNS[3];
+static const breath_pattern_t *wake = &BREATH_PATTERNS[4];
 
 int main(void)
 {
@@ -17,9 +19,14 @@ int main(void)
     assert(flow->label && flow->sub);
     assert(calm->label && calm->sub);
     assert(box->label && box->sub);
+    assert(sleep->label && sleep->sub);
+    assert(wake->label && wake->sub);
     assert(breath_engine_cycle_total_ms(flow) == 11000);
     assert(breath_engine_cycle_total_ms(calm) == 19000);
     assert(breath_engine_cycle_total_ms(box) == 16000);
+    assert(breath_engine_cycle_total_ms(sleep) == 10000);
+    assert(breath_engine_cycle_total_ms(wake) == 9000);
+    assert(BREATH_PATTERN_COUNT == 5u);
 
     // READY window
     breath_engine_at(calm, 0, &st);
@@ -81,6 +88,21 @@ int main(void)
     assert(breath_engine_minutes(59000) == 0);
     assert(breath_engine_minutes(60000) == 1);
     assert(breath_engine_minutes(124000) == 2);
+
+    // timed sessions (v1.2): FREE never reports done; the READY countdown
+    // does not count toward the target
+    assert(!breath_engine_target_reached(0, 0));
+    assert(!breath_engine_target_reached(999999, 0));
+    assert(!breath_engine_target_reached(62999, 60000));
+    assert(breath_engine_target_reached(63000, 60000));
+    assert(breath_engine_target_reached(1000000, 60000));
+
+    // milestone thresholds (v1.2): ladder then doubling
+    assert(breath_engine_next_milestone(0) == 10);
+    assert(breath_engine_next_milestone(10) == 30);
+    assert(breath_engine_next_milestone(29) == 30);
+    assert(breath_engine_next_milestone(600) == 1200);
+    assert(breath_engine_next_milestone(1200) == 2400);
 
     printf("breath engine: timeline ok\n");
     return 0;

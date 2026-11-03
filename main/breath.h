@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 #define BREATH_READY_MS       3000u   // GET READY countdown before first inhale
 #define BREATH_TICK_MS        100u    // audio -> UI event period (10 Hz)
-#define BREATH_PATTERN_COUNT  3u
+#define BREATH_PATTERN_COUNT  5u
 
 // Phase durations in ms. Zero-length phases are skipped by the engine, never
 // reported as phases. Engine contract: at least one phase is non-zero
@@ -57,6 +57,16 @@ void breath_engine_at(const breath_pattern_t *p, uint32_t elapsed_ms,
 
 // Whole minutes in an elapsed time (stats bookkeeping).
 uint32_t breath_engine_minutes(uint32_t elapsed_ms);
+
+// Timed sessions (v1.2): true when target_ms > 0 and the guided part of
+// the session (excluding the READY countdown) has reached the target. The
+// worker checks this at inhale starts, so a timed session always ends on
+// a completed breath cycle.
+bool breath_engine_target_reached(uint32_t elapsed_ms, uint32_t target_ms);
+
+// Lifetime milestone thresholds in minutes (v1.2): next threshold strictly
+// above reached (10/30/60/120/300/600, then doubling).
+uint32_t breath_engine_next_milestone(uint32_t reached_minutes);
 
 // ---------------------------------------------------------------------------
 // Glide tone (breath_tone.c, pure) - constants shared with the worker

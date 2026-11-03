@@ -25,7 +25,7 @@ static const char *TAG = "breath_audio";
 #define READY_TICK_MS 60
 #define STOP_FADE_SAMPLES 640u   // 40 ms release when the user ends mid-glide
 
-typedef struct { uint8_t cmd; uint8_t pattern; } breath_job_t;
+typedef struct { uint8_t cmd; uint8_t pattern; uint8_t dur_min; } breath_job_t;
 #define CMD_START 1
 #define CMD_STOP  2
 
@@ -77,8 +77,9 @@ static void post_event(breath_audio_ev_kind_t kind, const breath_state_t *st) {
     xQueueSend(s_event_q, &ev, 0);
 }
 
-static void run_session(uint8_t pattern_idx) {
+static void run_session(uint8_t pattern_idx, uint8_t dur_min) {
     const breath_pattern_t *p = &BREATH_PATTERNS[pattern_idx];
+    const uint32_t target_ms = (uint32_t)dur_min * 60000u;
     static int16_t buf[CHUNK];
     breath_tone_t tone;
     breath_state_t st = {0};
@@ -109,6 +110,14 @@ static void run_session(uint8_t pattern_idx) {
             cur = st.phase;
             tone_armed = false;
             if (cur == BREATH_PHASE_INHALE) {
+                if (breath_engine_target_reached(st.elapsed_ms, target_ms)) {
+                    // Timed end: fold the state back to the exact cycle
+                    // boundary so DONE reports whole completed cycles.
+                    const uint32_t total = breath_engine_cycle_total_ms(p);
+                    breath_engine_at(p,
+                        BREATH_READY_MS + st.cycle * total, &st);
+                    break;
+                }
                 breath_tone_glide(&tone, BREATH_HZ_LOW, BREATH_HZ_HIGH,
                                   MS_TO_SAMP(p->inhale_ms), 0.9f);
                 tone_armed = true;
@@ -179,7 +188,7 @@ static void audio_task(void *arg) {
     for (;;) {
         breath_job_t job;
         if (xQueueReceive(s_job_q, &job, portMAX_DELAY) != pdTRUE) continue;
-        if (job.cmd == CMD_START) run_session(job.pattern);
+        if (job.cmd == CMD_START) run_session(job.pattern, job.dur_min);
         // CMD_STOP with no session running is a no-op.
     }
 }
@@ -204,9 +213,10 @@ esp_err_t breath_audio_init(QueueHandle_t event_q) {
     return ESP_OK;
 }
 
-void breath_audio_session_start(uint8_t pattern_idx) {
+void breath_audio_session_start(uint8_t pattern_idx, uint8_t dur_min) {
     if (pattern_idx >= BREATH_PATTERN_COUNT) return;
-    breath_job_t job = { .cmd = CMD_START, .pattern = pattern_idx };
+    breath_job_t job = { .cmd = CMD_START, .pattern = pattern_idx,
+                         .dur_min = dur_min };
     xQueueSend(s_job_q, &job, 0);
 }
 

@@ -8,9 +8,11 @@
 #include "breath.h"
 
 const breath_pattern_t BREATH_PATTERNS[BREATH_PATTERN_COUNT] = {
-    { "FLOW", "5.5 + 5.5",     5500, 0,    5500, 0    },
-    { "CALM", "4 + 7 + 8",     4000, 7000, 8000, 0    },
-    { "BOX",  "4 + 4 + 4 + 4", 4000, 4000, 4000, 4000 },
+    { "FLOW",  "5.5 + 5.5",     5500, 0,    5500, 0    },
+    { "CALM",  "4 + 7 + 8",     4000, 7000, 8000, 0    },
+    { "BOX",   "4 + 4 + 4 + 4", 4000, 4000, 4000, 4000 },
+    { "SLEEP", "4 + 6",         4000, 0,    6000, 0    },
+    { "WAKE",  "6 + 3",         6000, 0,    3000, 0    },
 };
 
 uint32_t breath_engine_cycle_total_ms(const breath_pattern_t *p) {
@@ -19,6 +21,21 @@ uint32_t breath_engine_cycle_total_ms(const breath_pattern_t *p) {
 
 uint32_t breath_engine_minutes(uint32_t elapsed_ms) {
     return elapsed_ms / 60000u;
+}
+
+bool breath_engine_target_reached(uint32_t elapsed_ms, uint32_t target_ms) {
+    if (target_ms == 0u) return false;
+    return elapsed_ms >= BREATH_READY_MS + target_ms;
+}
+
+uint32_t breath_engine_next_milestone(uint32_t reached_minutes) {
+    static const uint32_t STEPS[] = { 10u, 30u, 60u, 120u, 300u, 600u };
+    for (size_t i = 0; i < sizeof(STEPS) / sizeof(STEPS[0]); i++) {
+        if (STEPS[i] > reached_minutes) return STEPS[i];
+    }
+    uint32_t m = 600u;
+    while (m <= reached_minutes) m *= 2u;
+    return m;
 }
 
 void breath_engine_at(const breath_pattern_t *p, uint32_t elapsed_ms,

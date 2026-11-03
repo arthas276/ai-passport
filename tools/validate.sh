@@ -32,6 +32,7 @@ run_static_checks() {
     "${test_dir}/test_breath_engine"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_breath_tone.c main/breath_tone.c -lm         -o "${test_dir}/test_breath_tone"
     "${test_dir}/test_breath_tone"
+    PYTHONDONTWRITEBYTECODE=1 python3 tests/test_hint_budget.py
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_demo_navigation.c main/demo_navigation.c \
         -o "${test_dir}/test_demo_navigation"

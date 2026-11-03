@@ -19,9 +19,12 @@ typedef struct {
 // Create the worker task. event_q receives breath_audio_event_t.
 esp_err_t breath_audio_init(QueueHandle_t event_q);
 
-// Start a session for BREATH_PATTERNS[pattern_idx]. UI contract: START only
-// when idle; OK long-press is the only in-session control and sends STOP.
-void breath_audio_session_start(uint8_t pattern_idx);
+// Start a session for BREATH_PATTERNS[pattern_idx]. dur_min 0 = free
+// length; otherwise the worker ends the session at the first inhale start
+// once the guided part reaches dur_min minutes (always on a completed
+// breath cycle). UI contract: START only when idle; OK long-press is the
+// only in-session control and sends STOP.
+void breath_audio_session_start(uint8_t pattern_idx, uint8_t dur_min);
 
 // Stop the running session: silence, end chime, then one EV_DONE.
 void breath_audio_session_stop(void);
