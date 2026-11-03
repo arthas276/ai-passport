@@ -35,6 +35,15 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_key_guard.c -o "${test_dir}/test_key_guard"
     "${test_dir}/test_key_guard"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_slang_core.c main/slang_core.c \
+        -o "${test_dir}/test_slang_core"
+    "${test_dir}/test_slang_core"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_slang_power.c main/slang_power.c \
+        -o "${test_dir}/test_slang_power"
+    "${test_dir}/test_slang_power"
+
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Icomponents/bsp/src \
         tests/test_bsp_display_rounding.c components/bsp/src/bsp_display_rounding.c \
         -o "${test_dir}/test_bsp_display_rounding"
