@@ -5,7 +5,16 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/breathe (from upstream main, post PR #107)
-> PRD version: v1.1 (2026-10-16: stop-fade kills the OK-long pop, chime
+> PRD version: v1.2 (2026-11-02: sleep-ready pass - SLEEP (4+6 extended
+> exhale) and WAKE (6+3 inhale-dominant) patterns; timed sessions (FREE /
+> 1 / 3 / 5 minutes, ending on the first completed cycle boundary after the
+> target); GLOW setting (BRIGHT / NIGHT 12% / DARK audio-only, session
+> backlight settles to the level after 10 s idle, any key peeks back);
+> lifetime-minute milestones celebrated on SUMMARY (10/30/60/120/300/600,
+> then doubling); SETUP screen holds DURATION / GLOW / VOLUME with rounded
+> hint pills on every screen and a frozen-glyph 204 px text budget enforced
+> by tests/test_hint_budget.py; session pace readout on SUMMARY); v1.1
+> (2026-10-16: stop-fade kills the OK-long pop, chime
 > zero-crossing start + edge ramps, default volume 60->70; v1.0 initial)
 > Mode: creator-selected new standalone play (breathing companion); tone
 > renderer lineage: ear_tone.c integer wavetable (device-proven 2026-09-29).
@@ -30,31 +39,40 @@
   volume changes happen only outside playback; DMA budget is 90 ms and the
   integer synth keeps >10x realtime render headroom
 
-## 3. Patterns (v1)
+## 3. Patterns (v1.2)
 
 | Pattern | Inhale | Hold | Exhale | Hold2 | Cycle | Feel |
 | --- | --- | --- | --- | --- | --- | --- |
 | FLOW | 5.5 s | - | 5.5 s | - | 11 s | coherent breathing, ~5.5 breaths/min |
 | CALM | 4 s | 7 s | 8 s | - | 19 s | 4-7-8 relax |
 | BOX | 4 s | 4 s | 4 s | 4 s | 16 s | box breathing, focus |
+| SLEEP | 4 s | - | 6 s | - | 10 s | extended exhale, wind-down (v1.2) |
+| WAKE | 6 s | - | 3 s | - | 9 s | inhale-dominant, morning (v1.2) |
 
 Zero-length phases are skipped, not rendered as phases.
 
 ## 4. Behavior, Screens & Buttons
 
-- HOME: title "BREATHE", battery top-right; rows FLOW / CALM / BOX / VOLUME
-  with sub-lines (phase durations / current volume %); footer lifetime stats
-  "N min - N cycles". UP/DOWN move the selection (wrap), OK enters. 10 s
-  idle dims to 30% (repo power convention); any key wakes.
-- VOLUME: big value + bar; UP/DOWN step ±10 (0..100, default 70), OK returns
-  to HOME (persisted).
+- HOME: title "BREATHE", battery top-right; rows FLOW / CALM / BOX / SLEEP /
+  WAKE / SETUP with sub-lines (phase durations / current duration+glow
+  summary); footer lifetime stats "N min - N cycles". UP/DOWN move the
+  selection (wrap), OK enters. 10 s idle dims to 30% (repo power
+  convention); any key wakes.
+- SETUP (v1.2): rows DURATION (FREE / 1 / 3 / 5 MIN, OK cycles), GLOW
+  (BRIGHT / NIGHT / DARK, OK cycles), VOLUME (OK opens the big screen);
+  OK long-press returns HOME. VOLUME keeps its screen and returns to SETUP.
 - SESSION: 3 s "GET READY" countdown with a soft tick each second, then
   repeating cycles: the center circle grows on INHALE and shrinks on EXHALE;
-  phase word + per-phase seconds countdown; cycle counter and elapsed M:SS.
-  The backlight stays on during a session; OK long-press ends it (soft
-  rising chime) and opens SUMMARY.
-- SUMMARY: this session (cycles, minutes) plus lifetime totals; stats are
-  persisted here, once, after playback has stopped; OK returns HOME.
+  phase word + per-phase seconds countdown; cycle counter and elapsed M:SS
+  (timed sessions count down the remaining time instead). Backlight starts
+  at 100%; with GLOW NIGHT/DARK it settles to 12% / 0% after 10 s idle and
+  any key peeks back to full. OK long-press ends it (soft rising chime) and
+  opens SUMMARY. A timed session ends by itself at the first inhale start
+  after the guided target - never cutting a breath cycle in half.
+- SUMMARY: this session (cycles, time, pace in cycles/min when >=1 min)
+  plus lifetime totals and, when crossed, the milestone line
+  "MILESTONE! N MIN"; stats are persisted here, once, after playback has
+  stopped; OK returns HOME.
 - Audio guidance: inhale = soft glide ~G3->D4 (196->294 Hz), exhale reversed,
   holds fade to silence; end chime E5->A5; volume follows the setting.
   Glide range A3->E4 (220->330 Hz).
