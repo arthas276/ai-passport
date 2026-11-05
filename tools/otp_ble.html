@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OTP-LINK 蓝牙联机</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; font: 15px/1.6 system-ui, "Microsoft YaHei", sans-serif;
+         background: #241a12; color: #fff3d6; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #b08a5a; font-size: 13px; margin-bottom: 14px; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 8px 14px; margin: 4px 6px 4px 0;
+           background: #b08a5a; color: #241a12; font-weight: 600; }
+  button:disabled { opacity: .4; }
+  button.ghost { background: #3d2e1e; color: #fff3d6; }
+  .row { margin: 10px 0; }
+  input, textarea { font: inherit; background: #3d2e1e; color: #fff3d6; border: 1px solid #6e5a44;
+                    border-radius: 8px; padding: 8px; width: calc(100% - 18px); box-sizing: border-box; }
+  textarea { height: 64px; }
+  #log { background: #1a120b; border: 1px solid #6e5a44; border-radius: 8px; padding: 10px;
+         height: 200px; overflow-y: auto; font: 12px/1.5 Consolas, monospace; white-space: pre-wrap; }
+  #state { font-weight: 600; color: #ffd98a; }
+  .hint { font-size: 13px; color: #b08a5a; }
+</style>
+</head>
+<body>
+<h1>OTP-LINK 蓝牙联机</h1>
+<div class="sub">设备端先开「电脑联机」页，再点连接。需 Chrome / Edge / Android Chrome；iOS Safari 不支持 Web Bluetooth，请用 nRF Connect（写 UUID 6E400002…，订 6E400003…）。Windows 若报 Not paired：先在系统蓝牙设置里配对 OTP-LINK（Just Works）。</div>
+
+<div class="row">
+  <button id="btn-connect">连接设备</button>
+  <button id="btn-time" disabled>同步时间</button>
+  <button id="btn-list" disabled>刷新列表</button>
+  <button id="btn-export" class="ghost" disabled>导出密钥</button>
+  <span id="state">未连接</span>
+</div>
+
+<div class="row">
+  <input id="add-name" placeholder="账户名（大写字母/数字/空格，≤16 字符）">
+</div>
+<div class="row">
+  <textarea id="add-secret" placeholder="Base32 密钥（如 JBSWY3DPEHPK3PXP），或整段 otpauth://totp/... 链接"></textarea>
+</div>
+<div class="row">
+  <button id="btn-add" disabled>导入账户</button>
+  <span class="hint">导入后设备联机页会显示该账户当前码，与手机验证器比对一致即成功。</span>
+</div>
+
+<div id="log"></div>
+
+<script>
+"use strict";
+const NUS = { svc: "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+              rx:  "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+              tx:  "6e400003-b5a3-f393-e0a9-e50e24dcca9e" };
+let device = null, rx = null, busy = false;
+
+const $ = id => document.getElementById(id);
+const log = (s, cls) => { const d = $("log"); d.innerHTML += (cls ? `<span style="color:#ffd98a">${s}</span>` : s) + "\n"; d.scrollTop = d.scrollHeight; };
+
+function setUI(connected) {
+  for (const id of ["btn-time", "btn-list", "btn-export", "btn-add"]) $(id).disabled = !connected;
+  $("btn-connect").textContent = connected ? "断开" : "连接设备";
+  $("state").textContent = connected ? "已连接" : "未连接";
+  if (!connected) device = null;
+}
+
+$("btn-connect").onclick = async () => {
+  if (device) { device.gatt.disconnect(); return; }
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: "OTP-LINK" }],
+                                                       optionalServices: [NUS.svc] });
+    device.addEventListener("gattserverdisconnected", () => { log("已断开"); setUI(false); });
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(NUS.svc);
+    rx = await svc.getCharacteristic(NUS.rx);
+    const tx = await svc.getCharacteristic(NUS.tx);
+    await tx.startNotifications();
+    tx.addEventListener("characteristicvaluechanged", e => log("← " + new TextDecoder().decode(e.target.value)));
+    log("已连接 " + (device.name || "?") + "，等待配对加密完成…");
+    setUI(true);
+  } catch (e) { log("连接失败: " + e.message, 1); setUI(false); }
+};
+
+async function send(line) {
+  if (!device || busy) return;
+  busy = true;
+  const once = async (l) => { log("→ " + l); await rx.writeValue(new TextEncoder().encode(l + "\n")); };
+  try { await once(line); }
+  catch (e) {
+    log("发送失败: " + e.message, 1);
+    /* 配对升级在订阅后 ~0.1s 由设备发起，Windows 完成 Just Works 需几秒：重试一次 */
+    if (/pair/i.test(e.message)) {
+      await new Promise(r => setTimeout(r, 4000));
+      try { await once(line); log("重试成功"); }
+      catch (e2) { log("重试仍失败: " + e2.message, 1); }
+    }
+  }
+  busy = false;
+}
+
+$("btn-time").onclick = () => send("TIME " + Math.floor(Date.now() / 1000));
+$("btn-list").onclick = () => send("LIST");
+$("btn-export").onclick = () => send("EXPORT");
+
+$("btn-add").onclick = () => {
+  const raw = $("add-secret").value.trim();
+  const name = $("add-name").value.trim().toUpperCase();
+  if (!raw) return log("密钥为空", 1);
+  if (raw.toLowerCase().startsWith("otpauth://")) return send("ADD " + raw);
+  if (!name) return log("请填账户名", 1);
+  send("ADD " + name + " " + raw.replace(/\s+/g, ""));
+};
+</script>
+</body>
+</html>

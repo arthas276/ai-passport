@@ -9,7 +9,11 @@
  *
  * The device only accepts these lines while the user has opened the 电脑联机
  * page; nothing is accepted on any other screen. Replies never contain
- * secrets - LIST answers with account names only. */
+ * secrets - LIST answers with account names only. EXPORT is the deliberate
+ * exception: it echoes every account's Base32 secret (one EXPORT <name>
+ * <secret> line each, then an OK EXPORT <n> terminator) for backup or
+ * migration, and only while the link page is physically open - the same gate
+ * that guards ADD. Anyone with USB access can already read NVS (otp_store.h). */
 
 #define OTP_LINK_LINE_MAX 96u
 
@@ -19,6 +23,7 @@ typedef enum {
     OTP_LINK_CMD_TIME,
     OTP_LINK_CMD_DEL,
     OTP_LINK_CMD_LIST,
+    OTP_LINK_CMD_EXPORT,
 } otp_link_cmd_t;
 
 typedef struct {

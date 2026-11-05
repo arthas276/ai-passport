@@ -123,5 +123,13 @@ bool otp_link_parse(const char *line, otp_link_msg_t *msg, const char **err) {
         msg->cmd = OTP_LINK_CMD_LIST;
         return true;
     }
+    if (strcasecmp(buf, "EXPORT") == 0) {
+        if (rest && *rest) {
+            *err = "EXPORT 不带参数";
+            return false;
+        }
+        msg->cmd = OTP_LINK_CMD_EXPORT;
+        return true;
+    }
     return false;
 }

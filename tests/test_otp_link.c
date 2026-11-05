@@ -64,6 +64,11 @@ int main(void)
     assert(otp_link_parse("list\r", &m, &err));
     assert(!otp_link_parse("LIST EXTRA", &m, &err));
 
+    // EXPORT: bare only, mirrors LIST (secrets echo as data lines + OK n).
+    assert(otp_link_parse("EXPORT", &m, &err) && m.cmd == OTP_LINK_CMD_EXPORT);
+    assert(otp_link_parse("export\r", &m, &err));
+    assert(!otp_link_parse("EXPORT ALL", &m, &err));
+
     // Unknown commands / empty / oversized lines.
     assert(!otp_link_parse("HELLO", &m, &err));
     assert(!otp_link_parse("", &m, &err));
@@ -73,6 +78,6 @@ int main(void)
     big[sizeof(big) - 1] = '\0';
     assert(!otp_link_parse(big, &m, &err));
 
-    puts("otp_link: ADD/TIME/DEL/LIST parser PASS");
+    puts("otp_link: ADD/TIME/DEL/LIST/EXPORT parser PASS");
     return 0;
 }

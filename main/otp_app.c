@@ -1,5 +1,6 @@
 #include "otp_app.h"
 
+#include "otp_ble.h"
 #include "otp_power.h"
 #include "otp_link.h"
 #include "driver/usb_serial_jtag.h"
@@ -100,7 +101,7 @@ static void render_list(void) {
         lv_label_set_text(s_body, s_app.store.accounts[s_app.selected].name);
         lv_label_set_text_fmt(s_detail, "%u / %u", s_app.selected + 1u, s_app.store.count);
     }
-    lv_label_set_text(s_footer, "上下选择  OK进入");
+    lv_label_set_text(s_footer, "OK进入  长按下联机");
 }
 
 static void render_code(void) {
@@ -130,7 +131,7 @@ static void render_code(void) {
             lv_label_set_text(s_detail, "无法计算");
         }
     }
-    lv_label_set_text(s_footer, "长按OK返回");
+    lv_label_set_text(s_footer, "长按下联机");
 }
 
 static void render_menu(void) {
@@ -404,6 +405,7 @@ static void enter_sleep(void) {
 static void link_write(const char *text) {
     (void)usb_serial_jtag_write_bytes((const uint8_t *)text, strlen(text),
                                       pdMS_TO_TICKS(100));
+    otp_ble_reply(text);
 }
 
 /* 应用一条已解析的联机指令并应答;存储/UI 访问与按键处理同样在 LVGL 锁内。 */
@@ -468,6 +470,22 @@ static void link_apply(const otp_link_msg_t *msg) {
         snprintf(s_link_last, sizeof(s_link_last), "列出 %u 个", (unsigned)s_app.store.count);
         break;
     }
+    case OTP_LINK_CMD_EXPORT: {
+        char b32[64];
+        char line[96];
+        for (uint8_t i = 0; i < s_app.store.count; i++) {
+            if (otp_base32_encode(s_app.store.accounts[i].secret,
+                                  s_app.store.accounts[i].secret_len,
+                                  b32, sizeof(b32)) == OTP_OK) {
+                snprintf(line, sizeof(line), "EXPORT %s %s\n",
+                         s_app.store.accounts[i].name, b32);
+                link_write(line);
+            }
+        }
+        snprintf(reply, sizeof(reply), "OK EXPORT %u\n", (unsigned)s_app.store.count);
+        snprintf(s_link_last, sizeof(s_link_last), "导出 %u 个", (unsigned)s_app.store.count);
+        break;
+    }
     default:
         strcpy(reply, "ERR 未知指令\n");
         break;
@@ -480,43 +498,53 @@ static void link_apply(const otp_link_msg_t *msg) {
     link_write(reply);
 }
 
+static void link_handle_line(const char *line) {
+    otp_power_activity(&s_power);
+    otp_link_msg_t msg;
+    const char *err = NULL;
+    if (!otp_link_parse(line, &msg, &err)) {
+        char bad[80];
+        snprintf(bad, sizeof(bad), "ERR %s\n", err);
+        link_write(bad);
+        return;
+    }
+    if (!bsp_lvgl_lock(1000)) {
+        link_write("ERR 忙\n");
+        return;
+    }
+    link_apply(&msg);
+    bsp_lvgl_unlock();
+}
+
 static void link_task(void *arg) {
     (void)arg;
     char line[OTP_LINK_LINE_MAX];
     size_t fill = 0;
     link_write("OK LINK OPEN\n");
+    otp_ble_start();
     while (s_link_open) {
         uint8_t ch = 0;
         int n = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(100));
-        if (n <= 0) continue;
-        if (ch == '\n' || ch == '\r') {
-            if (fill == 0) continue;
-            line[fill] = '\0';
-            fill = 0;
-            otp_link_msg_t msg;
-            const char *err = NULL;
-            if (!otp_link_parse(line, &msg, &err)) {
-                char bad[80];
-                snprintf(bad, sizeof(bad), "ERR %s\n", err);
-                link_write(bad);
-                continue;
+        if (n > 0) {
+            if (ch == '\n' || ch == '\r') {
+                if (fill > 0) {
+                    line[fill] = '\0';
+                    fill = 0;
+                    link_handle_line(line);
+                }
+            } else if (fill + 1u >= sizeof(line)) {
+                fill = 0;
+                link_write("ERR 行太长\n");
+            } else {
+                line[fill++] = (char)ch;
             }
-            if (!bsp_lvgl_lock(1000)) {
-                link_write("ERR 忙\n");
-                continue;
-            }
-            link_apply(&msg);
-            bsp_lvgl_unlock();
-            continue;
         }
-        if (fill + 1u >= sizeof(line)) {
-            fill = 0;
-            link_write("ERR 行太长\n");
-            continue;
+        while (otp_ble_pop_line(line, sizeof(line))) {
+            link_handle_line(line);
         }
-        line[fill++] = (char)ch;
     }
     link_write("OK LINK CLOSE\n");
+    otp_ble_stop();
     s_link_task = NULL;
     vTaskDelete(NULL);
 }
@@ -539,6 +567,9 @@ static void link_stop(void) {
 
 static void tick(lv_timer_t *timer) {
     (void)timer;
+    /* 联机页=正被电脑/手机操作：配对与手动输密钥都可能超过 60s 空闲阈值，
+     * 页面开着就不睡（退出页面即恢复常规策略；BLE/USB 也只在该页开放）。 */
+    if (s_app.screen == OTP_SCREEN_LINK) otp_power_activity(&s_power);
     otp_power_advance(&s_power, 250u);
     bsp_display_backlight(otp_power_backlight(&s_power));
     if (++s_soc_tick >= 20u) {   /* 每 5 秒刷新一次电量读数(走 I2C,不能每 tick 读) */
@@ -569,6 +600,14 @@ static void handle_key(int button, int event) {
         }
         else if (s_app.screen == OTP_SCREEN_ERROR) s_app.screen = s_app.return_screen;
         else s_app.screen = OTP_SCREEN_LIST;
+        render();
+        return;
+    }
+    if (event == BSP_BTN_LONG && button == BSP_BTN_DOWN &&
+        (s_app.screen == OTP_SCREEN_LIST || s_app.screen == OTP_SCREEN_CODE)) {
+        /* 长按下键：码表/账户页直通电脑联机，免菜单翻找。 */
+        link_start();
+        s_app.screen = OTP_SCREEN_LINK;
         render();
         return;
     }
