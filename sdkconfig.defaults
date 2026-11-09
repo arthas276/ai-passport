@@ -12,7 +12,7 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
-# --- 控制台:USB-Serial-JTAG(C3 原生 USB,GPIO18/19)---
+# --- 控制台:USB-Serial/JTAG(C3 原生 USB,GPIO18/19)---
 # 不用 UART0:其默认 TX=GPIO21 与本板背光引脚冲突。
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
@@ -24,9 +24,11 @@ CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_DEF_REFR_PERIOD=20
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
-# LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
-CONFIG_LV_MEM_SIZE_KILOBYTES=24
+CONFIG_LV_FONT_MONTSERRAT_28=y
+# LVGL malloc 走系统堆（~130KB 可用）：密码卡网格/密码屏在 24KB 内置池上有
+# 峰值溢出风险，分配失败会落进 LVGL 断言 while(1) 死循环（成语翻牌 2026-11-08
+# 真机冻结同款）。兄弟应用 EAR BUDDY / BREATHE / 成语翻牌均已用此修复（上游 PR #122）。
+CONFIG_LV_USE_CLIB_MALLOC=y
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000
