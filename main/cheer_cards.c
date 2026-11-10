@@ -31,6 +31,16 @@ const cheer_card_t CHEER_CARDS[] = {
     { "今天没熬夜，身体记住了", CHEER_GRP_DAILY },
     { "便利店关东煮，因你多卖了串", CHEER_GRP_DAILY },
     { "坐姿端正了三分钟，腰很感动", CHEER_GRP_DAILY },
+    { "泡面里卧了个蛋，档次不一样了", CHEER_GRP_DAILY },
+    { "钥匙一摸就在，秩序感满分", CHEER_GRP_DAILY },
+    { "睡前手机放远了，这波高级", CHEER_GRP_DAILY },
+    { "今天的午睡，睡出了周末的质量", CHEER_GRP_DAILY },
+    { "水今天喝够了，身体悄悄记账", CHEER_GRP_DAILY },
+    { "那个黄灯没闯，命是自己的", CHEER_GRP_DAILY },
+    { "洗的衣服全干了，天气也帮你", CHEER_GRP_DAILY },
+    { "快递纸箱压平了再扔，讲究", CHEER_GRP_DAILY },
+    { "电梯让人先下，风度还在", CHEER_GRP_DAILY },
+    { "挑的西红柿够红，眼光在线", CHEER_GRP_DAILY },
     // ---- WORK ----
     { "会上没人接的话，你接了", CHEER_GRP_WORK },
     { "周报写得不虚，这是稀缺品质", CHEER_GRP_WORK },
@@ -53,6 +63,16 @@ const cheer_card_t CHEER_CARDS[] = {
     { "准点出现的你，比打卡机可靠", CHEER_GRP_WORK },
     { "甲方今天没发作，是你的功劳", CHEER_GRP_WORK },
     { "把截止日期活成了截止日期", CHEER_GRP_WORK },
+    { "把甩来的锅，稳稳放了回去", CHEER_GRP_WORK },
+    { "拒绝了无效会议，时间回来了", CHEER_GRP_WORK },
+    { "新人问的问题，你答得耐心", CHEER_GRP_WORK },
+    { "文档补全了，后来人会谢你", CHEER_GRP_WORK },
+    { "截止日前交了，还提前半天", CHEER_GRP_WORK },
+    { "电话里总结的三条，全被采纳", CHEER_GRP_WORK },
+    { "报表一遍就对，眼睛值钱", CHEER_GRP_WORK },
+    { "帮实习生救的那段代码，算积德", CHEER_GRP_WORK },
+    { "跨部门那场架，你劝得体面", CHEER_GRP_WORK },
+    { "今天没硬撑，也没摆烂，节奏刚好", CHEER_GRP_WORK },
     // ---- STUDY ----
     { "错题本又厚了一页，是真在学", CHEER_GRP_STUDY },
     { "坐得住冷板凳的人，现在不多了", CHEER_GRP_STUDY },
@@ -75,6 +95,16 @@ const cheer_card_t CHEER_CARDS[] = {
     { "把「明天再说」过成了「今天说了」", CHEER_GRP_STUDY },
     { "草稿纸的用量，就是思考的密度", CHEER_GRP_STUDY },
     { "交卷前检查了名字，稳", CHEER_GRP_STUDY },
+    { "第三遍才懂的知识点，也作数", CHEER_GRP_STUDY },
+    { "笔记记得少，但句句是自己的", CHEER_GRP_STUDY },
+    { "睡前那一页书，真看进去了", CHEER_GRP_STUDY },
+    { "错题全标记了，下次它们死定了", CHEER_GRP_STUDY },
+    { "网课没开倍速，一遍过", CHEER_GRP_STUDY },
+    { "打卡一百天，手腕都认识你了", CHEER_GRP_STUDY },
+    { "给同学讲懂了，这才算真懂", CHEER_GRP_STUDY },
+    { "那个问题，你追到了根上", CHEER_GRP_STUDY },
+    { "草稿纸正面写满，翻面接着来", CHEER_GRP_STUDY },
+    { "考前没慌，按计划过了一遍", CHEER_GRP_STUDY },
     // ---- BRAVE ----
     { "手心出汗还是举了手，这叫勇", CHEER_GRP_BRAVE },
     { "没等「准备好」，直接开始了", CHEER_GRP_BRAVE },
@@ -97,6 +127,16 @@ const cheer_card_t CHEER_CARDS[] = {
     { "敢麻烦别人，是信任的开始", CHEER_GRP_BRAVE },
     { "今天没有逃，日子认了", CHEER_GRP_BRAVE },
     { "重新开始的人，手里都握着旧地图", CHEER_GRP_BRAVE },
+    { "群里那句大实话，是你说的", CHEER_GRP_BRAVE },
+    { "体检报告点开看了，勇", CHEER_GRP_BRAVE },
+    { "删掉消耗你的人，手起刀落", CHEER_GRP_BRAVE },
+    { "第一次进自由重量区，没缩", CHEER_GRP_BRAVE },
+    { "请路人帮拍合影，你开的口", CHEER_GRP_BRAVE },
+    { "拒绝那个电话，没编理由", CHEER_GRP_BRAVE },
+    { "承认搞砸了，然后修好了", CHEER_GRP_BRAVE },
+    { "提加薪的三个理由，写得漂亮", CHEER_GRP_BRAVE },
+    { "独自看完恐怖片，没快进", CHEER_GRP_BRAVE },
+    { "对医生的疑问，问清楚了才走", CHEER_GRP_BRAVE },
 };
 
 const size_t CHEER_CARD_COUNT = sizeof(CHEER_CARDS) / sizeof(CHEER_CARDS[0]);
@@ -124,7 +164,7 @@ void cheer_bag_init(cheer_bag_t *bag, uint32_t seed, uint8_t count) {
         bag->order[r] = t;
     }
     // An all-identity shuffle is statistically possible for tiny decks;
-    // with 84 cards it cannot happen, but guard anyway: swap the first two
+    // with 124 cards it cannot happen, but guard anyway: swap the first two
     // if the bag came out fully sorted (deterministic, test-friendly).
     bool sorted = true;
     for (uint8_t i = 0; i < count; i++) {
