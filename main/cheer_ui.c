@@ -209,7 +209,7 @@ void cheer_ui_build(void) {
     lv_obj_set_y(s_text, 96);   // recenters on every set_text (see below)
 
     s_hist = ui_pixel_label(scr, "", &lv_font_montserrat_14, CARD_MUTED);
-    lv_obj_align(s_hist, LV_ALIGN_TOP_MID, 0, 226);
+    lv_obj_align(s_hist, LV_ALIGN_TOP_MID, 0, 28);
     // Bottom column: three lines vertically centered on the lantern body
     // (lantern center y=264; line centers 244/266/288).
     s_aux = ui_pixel_label(scr, "PRAISE 0", &lv_font_montserrat_14,

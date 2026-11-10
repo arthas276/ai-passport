@@ -57,6 +57,18 @@ static int library_ok(void) {
         if (!c->text || !c->text[0]) return 0;
         if (strlen(c->text) >= CHEER_TEXT_MAX) return 0;
         if (c->grp >= CHEER_GRP_COUNT) return 0;
+        if (strchr(c->text, '\n')) {
+            size_t line = 0;
+            for (const char *p = c->text; ; p++) {
+                if (*p == '\n' || *p == '\0') {
+                    if (line > CHEER_TEXT_COLS * 3) return 0;   // CJK glyph = 3 bytes
+                    if (*p == '\0') break;
+                    line = 0;
+                } else {
+                    line++;
+                }
+            }
+        }
         per_grp[c->grp]++;
     }
     for (int g = 0; g < CHEER_GRP_COUNT; g++) {

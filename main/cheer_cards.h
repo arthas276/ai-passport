@@ -20,6 +20,7 @@ typedef struct {
 } cheer_card_t;
 
 #define CHEER_TEXT_MAX 64
+#define CHEER_TEXT_COLS 6   // card text area fits 6 CJK glyphs per line
 
 // The library (single source of truth for the font subset generator).
 extern const cheer_card_t CHEER_CARDS[];
