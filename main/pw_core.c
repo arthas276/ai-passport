@@ -17,7 +17,11 @@ uint32_t pw_name_charset_len(void) {
 }
 
 static uint32_t pw_rotl(uint32_t x, unsigned k) {
-    return (x << k) | (x >> (32u - k));
+    // xoshiro128** 参考实现以 rotl(s[3], 45) 调用（等价旋转 13）。把 k 归一到
+    // 0..31，消除 C 标准下 k>=32 的未定义移位（zig cc 陷阱，RISC-V/gcc 靠硬件
+    // 截断）。输出与设备端已发布固件逐位一致。
+    k &= 31u;
+    return (x << k) | (x >> ((32u - k) & 31u));
 }
 
 void pw_rng_seed(pw_rng_t *rng, const uint8_t seed[PW_SEED_BYTES]) {
