@@ -14,13 +14,15 @@
 #include "lvgl.h"
 #include <stdio.h>
 
+// Family night-navy palette shared with EAR/OTP (house style).
 #define C_BG    0x1B263B
 #define C_CARD  0x24344D
+#define C_EDGE  0x3A4C6E   // borders / ticks / track edge
 #define C_TEXT  0xFFFFFF
 #define C_MUTED 0x8D99AE
 #define C_OK    0x2ECC71
 #define C_BAD   0xE76F51
-#define C_CYAN  0x4EA8DE
+#define C_ACC   0x4EA8DE   // cyan accent: needle / live elements
 
 #define TRACK_X 20
 #define TRACK_W 200
@@ -68,6 +70,9 @@ static void note_activity(void) {
 static void set_status(const char *text, uint32_t color) {
     lv_label_set_text(s_status, text);
     lv_obj_set_style_text_color(s_status, lv_color_hex(color), 0);
+    // The big note readout shares the state colour: red when far, green
+    // when locked in, plain text otherwise.
+    lv_obj_set_style_text_color(s_note, lv_color_hex(color), 0);
 }
 
 // Hint line reflects the freeze state and whether the mode has strings
@@ -79,7 +84,7 @@ static void set_hint(void) {
                      ? "UPL REF  OK FREEZE  OKL MODE"
                      : "OK FREEZE  OKL MODE");
     lv_obj_set_style_text_color(s_hint,
-        lv_color_hex(s_frozen ? C_CYAN : C_MUTED), 0);
+        lv_color_hex(s_frozen ? C_ACC : C_MUTED), 0);
 }
 
 static void set_marker(float cents) {
@@ -104,8 +109,10 @@ static float reference_cents(const tuner_event_t *ev, int16_t *ref_midi) {
 
 static void refresh_mode_ui(void) {
     char t[32];
-    snprintf(t, sizeof(t), "TUNER • %s", tuner_mode_name(s_mode));
-    lv_label_set_text(s_title, t);
+    // Title is the bare mode name: "TUNER • <MODE>" centred at 20 px would
+    // run ~187 px wide and collide with the battery readout at top-right;
+    // the longest mode name is ~110 px, which clears it.
+    lv_label_set_text(s_title, tuner_mode_name(s_mode));
     if (tuner_mode_string_count(s_mode) > 0) {
         snprintf(t, sizeof(t), "STR %d/%d", s_strings.index + 1,
                  tuner_mode_string_count(s_mode));
@@ -149,7 +156,7 @@ void tuner_ui_init(QueueHandle_t app_q) {
 
     s_aux = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_aux, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_aux, lv_color_hex(C_CYAN), 0);
+    lv_obj_set_style_text_color(s_aux, lv_color_hex(C_ACC), 0);
     lv_obj_align(s_aux, LV_ALIGN_TOP_MID, 0, 128);
     lv_label_set_text(s_aux, "");
 
@@ -163,18 +170,33 @@ void tuner_ui_init(QueueHandle_t app_q) {
     lv_obj_set_size(s_bar, TRACK_W, 14);
     lv_obj_set_pos(s_bar, TRACK_X, 220);
     lv_obj_set_style_bg_color(s_bar, lv_color_hex(C_CARD), 0);
+    lv_obj_set_style_border_color(s_bar, lv_color_hex(C_EDGE), 0);
+    lv_obj_set_style_border_width(s_bar, 1, 0);
+    lv_obj_set_style_radius(s_bar, 7, 0);
     lv_obj_clear_flag(s_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     s_zone = lv_obj_create(s_bar);
     lv_obj_set_size(s_zone, (int)(TUNER_IN_TUNE_CENTS * 2 * PX_PER_CENT), 14);
     lv_obj_set_pos(s_zone, CENTER_X - (int)(TUNER_IN_TUNE_CENTS * PX_PER_CENT), 0);
     lv_obj_set_style_bg_color(s_zone, lv_color_hex(C_OK), 0);
+    lv_obj_set_style_border_width(s_zone, 0, 0);
+    lv_obj_set_style_radius(s_zone, 7, 0);
     lv_obj_clear_flag(s_zone, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Centre tick: one-pixel reference line under the needle at rest.
+    lv_obj_t *tick = lv_obj_create(s_bar);
+    lv_obj_set_size(tick, 2, 14);
+    lv_obj_set_pos(tick, CENTER_X - 1, 0);
+    lv_obj_set_style_bg_color(tick, lv_color_hex(C_EDGE), 0);
+    lv_obj_set_style_border_width(tick, 0, 0);
+    lv_obj_clear_flag(tick, LV_OBJ_FLAG_SCROLLABLE);
 
     s_marker = lv_obj_create(s_bar);
     lv_obj_set_size(s_marker, 12, 26);
     lv_obj_set_pos(s_marker, CENTER_X, -6);
-    lv_obj_set_style_bg_color(s_marker, lv_color_hex(C_CYAN), 0);
+    lv_obj_set_style_bg_color(s_marker, lv_color_hex(C_ACC), 0);
+    lv_obj_set_style_border_width(s_marker, 0, 0);
+    lv_obj_set_style_radius(s_marker, 4, 0);
     lv_obj_clear_flag(s_marker, LV_OBJ_FLAG_SCROLLABLE);
 
     s_status = lv_label_create(s_scr);
@@ -282,7 +304,7 @@ void tuner_ui_handle_audio(const void *event) {
     }
 
     char t[24];
-    snprintf(t, sizeof(t), "%.1f Hz", (double)ev->hz);
+    snprintf(t, sizeof(t), "%.1f Hz  %+.1fct", (double)ev->hz, (double)cents);
     lv_label_set_text(s_hz, t);
     set_marker(cents);
 
