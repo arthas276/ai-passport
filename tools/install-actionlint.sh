@@ -75,8 +75,8 @@ else
     exit 1
 fi
 if [[ "${platform}" == windows_* ]]; then
-    # Windows ships a zip; GNU tar cannot read zip, so use the Windows
-    # bundled bsdtar with native paths (cygpath converts for Git Bash).
+    # Windows ships a zip; GNU tar cannot read zip, so extract with the
+    # Windows bundled bsdtar using native paths (cygpath converts for Git Bash).
     /c/Windows/System32/tar.exe -xf "$(cygpath -w "${archive_path}")" \
         -C "$(cygpath -w "${destination}")" actionlint.exe
     chmod +x "${destination}/actionlint.exe"
