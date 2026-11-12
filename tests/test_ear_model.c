@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "ear_game.h"
 
 int main(void)
@@ -167,6 +168,46 @@ int main(void)
     s.score = 9;
     assert(!ear_model_perfect(&s));
 
-    printf("model: grading + level adjust + L4/L5 ok\n");
+    // ---- REVIEW mode (v2.0) ----
+    memset(miss, 0, sizeof(miss));
+    uint8_t pool[EAR_KIND_COUNT];
+    assert(ear_model_review_pool(miss, pool) == 0);          // empty book
+    assert(ear_model_review_total(miss) == 0);
+    miss[EAR_KIND_MIN3] = 2;
+    miss[EAR_KIND_MAJ] = 1;
+    uint8_t pn = ear_model_review_pool(miss, pool);
+    assert(pn == 2 && pool[0] == EAR_KIND_MIN3 && pool[1] == EAR_KIND_MAJ);
+    assert(ear_model_review_total(miss) == 3);
+
+    // 300 review questions: answer always in the pool, options are 4,
+    // unique, all same category as the answer, answer present, no adjacent
+    // repeat while the pool allows it (pool has 2 kinds here).
+    uint8_t rprev = 0xFF;
+    for (int i = 0; i < 300; i++) {
+        ear_model_review_question(miss, pool, pn, rprev, &q);
+        int in_pool = 0;
+        for (uint8_t k = 0; k < pn; k++) if (pool[k] == (uint8_t)q.answer) in_pool = 1;
+        assert(in_pool);
+        int answer_in_options = 0;
+        bool chord_q = (EAR_KINDS[q.answer].semis == 0xFF);
+        for (uint8_t k = 0; k < 4; k++) {
+            assert(q.options[k] < EAR_KIND_COUNT);
+            assert((EAR_KINDS[q.options[k]].semis == 0xFF) == chord_q);
+            for (uint8_t j = 0; j < k; j++)
+                assert(q.options[j] != q.options[k]);
+            if (q.options[k] == (uint8_t)q.answer) answer_in_options = 1;
+        }
+        assert(answer_in_options);
+        if (pn > 1) assert((uint8_t)q.answer != rprev);
+        rprev = (uint8_t)q.answer;
+    }
+
+    // Graduate: correct answer decrements, floors at 0.
+    assert(ear_model_review_graduate(miss, EAR_KIND_MIN3) == 1);
+    assert(ear_model_review_graduate(miss, EAR_KIND_MIN3) == 0);
+    assert(ear_model_review_graduate(miss, EAR_KIND_MIN3) == 0);
+    assert(ear_model_review_total(miss) == 1);
+
+    printf("model: grading + level adjust + L4/L5 + review ok\n");
     return 0;
 }

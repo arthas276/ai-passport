@@ -166,3 +166,90 @@ uint8_t auto_level_adjust(uint8_t old_level, uint8_t score, uint8_t level_max,
 bool ear_model_perfect(const ear_session_t *s) {
     return s->score == EAR_QUESTIONS_PER_SESSION;
 }
+
+// ---------------------------------------------------------------------------
+// REVIEW mode - mistake trainer (v2.0)
+// ---------------------------------------------------------------------------
+// Distractor pools for review options: all interval kinds, all chord kinds.
+static const uint8_t REVIEW_POOL_INTERVAL[11] = {
+    EAR_KIND_MIN2, EAR_KIND_MAJ2, EAR_KIND_MIN3, EAR_KIND_MAJ3,
+    EAR_KIND_P4, EAR_KIND_P5, EAR_KIND_MIN6, EAR_KIND_MAJ6,
+    EAR_KIND_MIN7I, EAR_KIND_MAJ7I, EAR_KIND_OCT,
+};
+static const uint8_t REVIEW_POOL_CHORD[7] = {
+    EAR_KIND_DIM, EAR_KIND_MIN, EAR_KIND_MAJ, EAR_KIND_AUG,
+    EAR_KIND_MAJ7, EAR_KIND_DOM7, EAR_KIND_MIN7C,
+};
+
+// Fill out with kinds whose miss count is > 0 (interval + chord mixed).
+// Returns the pool size; out must hold EAR_KIND_COUNT entries.
+uint8_t ear_model_review_pool(const uint32_t *miss, uint8_t *out) {
+    uint8_t n = 0;
+    for (uint8_t k = 0; k < EAR_KIND_COUNT; k++) {
+        if (miss && miss[k] > 0) out[n++] = k;
+    }
+    return n;
+}
+
+// Total misses left (review header counter).
+uint32_t ear_model_review_total(const uint32_t *miss) {
+    uint32_t t = 0;
+    for (uint8_t k = 0; k < EAR_KIND_COUNT; k++) t += miss ? miss[k] : 0;
+    return t;
+}
+
+// One review correct answer graduates the kind: miss floor 0. Returns the
+// new value (pure so host tests can pin it).
+uint32_t ear_model_review_graduate(uint32_t *miss, ear_kind_t k) {
+    if (miss[k] > 0) miss[k]--;
+    return miss[k];
+}
+
+// Generate a review question: the answer is drawn from pool (weighted by
+// miss), options are the answer plus 3 same-category distractors, shuffled.
+// prev_kind suppresses repeats when the pool allows it. Interval questions
+// mix UP/DOWN directions; chords stay in root position.
+void ear_model_review_question(const uint32_t *miss, const uint8_t *pool,
+                               uint8_t pool_n, uint8_t prev_kind,
+                               ear_question_t *q) {
+    // Weighted draw from the pool by miss count (cap so one kind cannot
+    // take over; misses are small in practice).
+    uint32_t total = 0;
+    for (uint8_t i = 0; i < pool_n; i++) {
+        uint32_t m = miss[pool[i]];
+        if (m > MISS_CAP) m = MISS_CAP;
+        total += 1u + m;
+    }
+    uint8_t drawn = pool[0];
+    for (int tries = 0; tries < 20; tries++) {
+        uint32_t r = rand() % total;
+        drawn = pool[pool_n - 1];
+        for (uint8_t i = 0; i < pool_n; i++) {
+            uint32_t m = miss[pool[i]];
+            if (m > MISS_CAP) m = MISS_CAP;
+            if (r < 1u + m) { drawn = pool[i]; break; }
+            r -= 1u + m;
+        }
+        if (!(pool_n > 1 && drawn == prev_kind)) break;
+    }
+    bool is_chord = (EAR_KINDS[drawn].semis == 0xFF);
+    const uint8_t *dist = is_chord ? REVIEW_POOL_CHORD : REVIEW_POOL_INTERVAL;
+    uint8_t dist_n = is_chord ? 7 : 11;
+
+    q->root = 60 + (rand() % 10);
+    q->answer = (ear_kind_t)drawn;
+    q->dir = is_chord ? EAR_DIR_UP : (ear_dir_t)(rand() % 2);
+    q->inv = 0;
+    q->options[0] = drawn;
+    uint8_t n = 1;
+    // Fill distractors: prefer semitone-adjacent kinds first (they are the
+    // classic confusions), then anything else in the category.
+    for (uint8_t i = 0; i < dist_n && n < 4; i++) {
+        uint8_t cand = dist[i];
+        if (cand == drawn) continue;
+        bool dup = false;
+        for (uint8_t j = 0; j < n; j++) if (q->options[j] == cand) dup = true;
+        if (!dup) q->options[n++] = cand;
+    }
+    shuffle_options(q->options, n);
+}

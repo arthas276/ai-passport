@@ -152,6 +152,23 @@ uint8_t auto_level_adjust(uint8_t old_level, uint8_t score, uint8_t level_max,
 // Session perfect bonus eligibility.
 bool ear_model_perfect(const ear_session_t *s);
 
+// --- REVIEW mode (mistake trainer, v2.0) ---
+// Kinds with miss > 0 (mixed intervals + chords). Returns pool size.
+uint8_t ear_model_review_pool(const uint32_t *miss, uint8_t *out);
+// Total misses left across all kinds.
+uint32_t ear_model_review_total(const uint32_t *miss);
+// A review correct answer graduates the kind (miss floor 0); returns new.
+uint32_t ear_model_review_graduate(uint32_t *miss, ear_kind_t k);
+// One review question: miss-weighted answer from pool, 3 same-category
+// distractors, shuffled options. prev_kind suppresses repeats.
+void ear_model_review_question(const uint32_t *miss, const uint8_t *pool,
+                               uint8_t pool_n, uint8_t prev_kind,
+                               ear_question_t *q);
+
+// Combo milestones (v2.0 streak rewards): bonus XP at these combo sizes.
+#define EAR_COMBO_BRONZE 5u    // +1 XP status flash
+#define EAR_COMBO_GOLD  10u    // +2 XP and the evolve fanfare
+
 // ---------------------------------------------------------------------------
 // Dictation (melody echo) mode - v1.4 (PRD 3.4)
 // ---------------------------------------------------------------------------

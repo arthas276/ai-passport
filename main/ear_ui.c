@@ -81,6 +81,11 @@ static ear_dictation_melody_t s_ss_mel;
 
 // ---- home mode card (includes SETUP as 4th entry) ----
 static uint8_t s_mode_card;
+// REVIEW mode (v2.0): quiz screen driven by the miss book instead of the
+// level tables.
+static bool s_review;
+static uint8_t s_review_pool[EAR_KIND_COUNT];
+static uint8_t s_review_pool_n;
 
 // ---- LVGL objects per screen (only the active screen objects exist) ----
 static lv_obj_t *h_scr, *h_title, *h_batt, *h_pet, *h_bar, *h_xp_lbl;
@@ -212,12 +217,11 @@ static void enter_dictation(void);
 static void enter_setup(void);
 // ---- HOME ----
 // Mode card names (index = s_mode_card: 0 INTERVAL 1 CHORD 2 SING 3 DUET
-// 4 DICTATION 5 VS 6 RHYTHM 7 SIGHTSING 8 SETUP).
-static const char *MODE_NAMES[9] = {
+// 4 DICTATION 5 VS 6 RHYTHM 7 SIGHTSING 8 REVIEW 9 SETUP).
+static const char *MODE_NAMES[10] = {
     "MODE: INTERVAL", "MODE: CHORD", "MODE: SING", "MODE: DUET",
     "MODE: DICTATION", "MODE: VS BATTLE", "MODE: RHYTHM",
-    "MODE: SIGHTSING",
-    "MODE: SETUP",
+    "MODE: SIGHTSING", "MODE: REVIEW", "MODE: SETUP",
 };
 
 // Battery text: --% when CW2017 read fails (graceful degrade).
@@ -284,6 +288,7 @@ static void enter_home(void) {
     if (h_scr) { lv_obj_delete(h_scr); h_scr = NULL; }
     s_scr = SCR_HOME;
     s_vs = false;                   // any HOME entry ends a VS match (v1.7)
+    s_review = false;              // and a review session (v2.0)
     h_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(h_scr, lv_color_hex(C_BG), 0);
 
@@ -392,17 +397,37 @@ static void quiz_refresh_hdr(void) {
                  (unsigned)s_vsst.p1_score, (unsigned)s_vsst.p2_score);
         lbl(q_hdr, hdr, C_GOLD);
     } else {
-        snprintf(hdr, sizeof(hdr), "Q %u/%u LV%u",
+        snprintf(hdr, sizeof(hdr), "Q %u/%u LV%u%s%u",
                  (unsigned)(s_sess.index + 1),
                  (unsigned)EAR_QUESTIONS_PER_SESSION,
-                 (unsigned)s_sess.level);
-        lbl(q_hdr, hdr, C_MUTED);
+                 (unsigned)s_sess.level,
+                 (s_sess.combo >= 3) ? " x" : "",
+                 (s_sess.combo >= 3) ? (unsigned)s_sess.combo : 0u);
+        lbl(q_hdr, hdr, s_review ? C_GOLD : C_MUTED);
     }
+}
+
+// Review header variant: question index + misses still in the book.
+static void review_refresh_hdr(void) {
+    char hdr[40];
+    snprintf(hdr, sizeof(hdr), "R %u/%u MISS %lu%s%u",
+             (unsigned)(s_sess.index + 1),
+             (unsigned)EAR_QUESTIONS_PER_SESSION,
+             (unsigned long)ear_model_review_total(s_save.kind_miss),
+             (s_sess.combo >= 3) ? " x" : "",
+             (s_sess.combo >= 3) ? (unsigned)s_sess.combo : 0u);
+    lbl(q_hdr, hdr, C_GOLD);
 }
 
 // Load the next question: state, labels, grid, and start playback.
 static void quiz_load_question(void) {
-    ear_model_next_question(&s_sess, &s_q);
+    if (s_review) {
+        ear_model_review_question(s_save.kind_miss, s_review_pool,
+                                  s_review_pool_n, s_sess.prev_kind, &s_q);
+        s_sess.prev_kind = (uint8_t)s_q.answer;
+    } else {
+        ear_model_next_question(&s_sess, &s_q);
+    }
     s_cursor = 0;
     s_awaiting_answer = true;
     s_advancing = false;
@@ -412,7 +437,7 @@ static void quiz_load_question(void) {
     for (uint8_t i = 0; i < n; i++) {
         lbl(q_cells_lbl[i], EAR_KINDS[s_q.options[i]].label, C_TEXT);
     }
-    quiz_refresh_hdr();
+    if (s_review) review_refresh_hdr(); else quiz_refresh_hdr();
     lbl(q_status, "LISTEN...", C_CYAN);
     quiz_grid_refresh();   // reset cursor fill + clear the previous grading colors
     ear_audio_play_question(s_q.root, s_q.answer, s_q.dir, s_q.inv);
@@ -421,6 +446,7 @@ static void quiz_load_question(void) {
 // Enter the quiz screen for a mode (INTERVAL or CHORD).
 static void enter_quiz(ear_mode_t mode) {
     uint8_t lvl = (mode == EAR_MODE_INTERVAL) ? s_save.ilvl : s_save.clvl;
+    if (s_review) lvl = 2;   // review always presents 4 options (L2 geometry)
     ear_model_session_init(&s_sess, mode, lvl);
     ear_model_set_miss(s_save.kind_miss);   // weakness-weighted draw (v1.8)
     s_sess_xp = 0;
@@ -484,6 +510,32 @@ static void enter_vs(void) {
     quiz_refresh_hdr();              // retitle Q1 with the P1 turn header
 }
 
+// Enter REVIEW (v2.0): build the miss pool; empty book gets a dedicated
+// ALL CLEAR screen (result key handling: any OK returns HOME).
+static void enter_review(void) {
+    s_review_pool_n = ear_model_review_pool(s_save.kind_miss,
+                                            s_review_pool);
+    if (s_review_pool_n == 0) {
+        if (r_scr) { lv_obj_delete(r_scr); r_scr = NULL; }
+        s_scr = SCR_RESULT;
+        r_scr = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(r_scr, lv_color_hex(C_BG), 0);
+        r_score = lv_label_create(r_scr);
+        lv_obj_set_style_text_font(r_score, &lv_font_montserrat_20, 0);
+        lv_obj_align(r_score, LV_ALIGN_TOP_MID, 0, 100);
+        lbl(r_score, "ALL CLEAR!", C_OK);
+        r_xp = lv_label_create(r_scr);
+        lv_obj_set_style_text_font(r_xp, &lv_font_montserrat_14, 0);
+        lv_obj_align(r_xp, LV_ALIGN_TOP_MID, 0, 140);
+        lbl(r_xp, "NO MISSES - GO PLAY", C_MUTED);
+        lv_screen_load(r_scr);
+        return;
+    }
+    s_review = true;
+    enter_quiz(EAR_MODE_INTERVAL);   // review questions are mostly intervals;
+                                     // chord kinds keep their own playback
+}
+
 // Advance to the next question or the result page (VS: its own verdict).
 static void quiz_advance(void) {
     s_sess.index++;
@@ -544,14 +596,32 @@ static void grade_answer(void) {
         if (!s_vs && s_sess.combo > s_save.best_combo) {
             s_save.best_combo = s_sess.combo;   // combo stays a solo stat
         }
-        award_xp(EAR_XP_CORRECT);
-        s_sess_xp += EAR_XP_CORRECT;
-        ear_audio_play_cue(0);
-        lbl(q_status, "RIGHT! +1 XP", C_OK);
+        uint32_t bonus = 0;
+        if (!s_vs) {                  // v2.0 streak milestones (solo only)
+            if (s_sess.combo == EAR_COMBO_GOLD) bonus = 2;
+            else if (s_sess.combo == EAR_COMBO_BRONZE) bonus = 1;
+        }
+        if (s_review) {               // v2.0: review graduates the kind
+            ear_model_review_graduate(s_save.kind_miss, s_q.answer);
+        }
+        award_xp(EAR_XP_CORRECT + bonus);
+        s_sess_xp += EAR_XP_CORRECT + bonus;
+        if (bonus == 2) ear_audio_play_cue(2);          // gold fanfare
+        else ear_audio_play_cue(0);
+        char t[40];
+        if (bonus > 0) {
+            snprintf(t, sizeof(t), "COMBO x%u +%lu XP",
+                     (unsigned)s_sess.combo,
+                     (unsigned long)(EAR_XP_CORRECT + bonus));
+            lbl(q_status, t, C_GOLD);
+        } else {
+            snprintf(t, sizeof(t), "RIGHT! +1 XP");
+            lbl(q_status, t, C_OK);
+        }
         lv_obj_set_style_border_color(q_cells[s_cursor],
-                                      lv_color_hex(C_OK), 0);
+                                      lv_color_hex(bonus > 0 ? C_GOLD : C_OK), 0);
         lv_obj_set_style_text_color(q_cells_lbl[s_cursor],
-                                    lv_color_hex(C_OK), 0);
+                                    lv_color_hex(bonus > 0 ? C_GOLD : C_OK), 0);
     } else {
         ear_audio_play_cue(1);
         ear_audio_play_question(s_q.root, s_q.answer, s_q.dir, s_q.inv);   // teach: replay
@@ -1610,6 +1680,12 @@ static void enter_result(void) {
         award_xp(EAR_XP_PERFECT);
         s_sess_xp += EAR_XP_PERFECT;
     }
+    if (s_review) {   // v2.0: no level adjust for review sessions
+        ear_store_save(&s_save);
+        enter_result_common(s_sess.score, EAR_QUESTIONS_PER_SESSION,
+                            s_sess_xp);
+        return;
+    }
     uint8_t old_lvl = (s_sess.mode == EAR_MODE_INTERVAL)
                     ? s_save.ilvl : s_save.clvl;
     bool changed = false;
@@ -1793,10 +1869,10 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     case SCR_HOME:
         if (ev != BSP_BTN_CLICK) return;
         if (btn == BSP_BTN_UP) {
-            s_mode_card = (uint8_t)((s_mode_card + 8) % 9);
+            s_mode_card = (uint8_t)((s_mode_card + 9) % 10);
             home_refresh();
         } else if (btn == BSP_BTN_DOWN) {
-            s_mode_card = (uint8_t)((s_mode_card + 1) % 9);
+            s_mode_card = (uint8_t)((s_mode_card + 1) % 10);
             home_refresh();
         } else if (btn == BSP_BTN_OK) {
             if (s_mode_card == 0) enter_quiz(EAR_MODE_INTERVAL);
@@ -1807,6 +1883,7 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             else if (s_mode_card == 5) enter_vs();
             else if (s_mode_card == 6) enter_rhythm();
             else if (s_mode_card == 7) enter_sightsing();
+            else if (s_mode_card == 8) enter_review();
             else enter_setup();
         }
         break;
