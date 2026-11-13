@@ -6,6 +6,10 @@ typedef struct {
     uint8_t  vol;        // 0..100, default 70
     uint8_t  dur_min;    // 0=FREE / 1 / 3 / 5 minutes, default 0 (v1.2)
     uint8_t  glow;       // 0=BRIGHT / 1=NIGHT / 2=DARK, default 0 (v1.2)
+    uint8_t  c_in;       // YOURS inhale seconds 1..10, default 5 (v1.3)
+    uint8_t  c_hold;     // YOURS hold seconds 0..10, default 0 (v1.3)
+    uint8_t  c_out;      // YOURS exhale seconds 1..10, default 5 (v1.3)
+    uint8_t  c_hold2;    // YOURS post-exhale hold 0..10, default 0 (v1.3)
     uint32_t sessions;   // completed sessions
     uint32_t minutes;    // lifetime guided minutes
     uint32_t cycles;     // lifetime completed breath cycles

@@ -78,7 +78,11 @@ static void post_event(breath_audio_ev_kind_t kind, const breath_state_t *st) {
 }
 
 static void run_session(uint8_t pattern_idx, uint8_t dur_min) {
-    const breath_pattern_t *p = &BREATH_PATTERNS[pattern_idx];
+    // Snapshot the pattern struct: the runtime slot is only edited from
+    // SETTINGS, which cannot be open during a session, but a local copy
+    // keeps that guarantee inside this function instead of cross-module.
+    const breath_pattern_t pat = *breath_engine_pattern(pattern_idx);
+    const breath_pattern_t *p = &pat;
     const uint32_t target_ms = (uint32_t)dur_min * 60000u;
     static int16_t buf[CHUNK];
     breath_tone_t tone;
@@ -121,8 +125,18 @@ static void run_session(uint8_t pattern_idx, uint8_t dur_min) {
                 breath_tone_glide(&tone, BREATH_HZ_LOW, BREATH_HZ_HIGH,
                                   MS_TO_SAMP(p->inhale_ms), 0.9f);
                 tone_armed = true;
+            } else if (cur == BREATH_PHASE_INHALE2) {
+                // Top-up inhale: a shorter, higher rise above the normal
+                // ceiling - the second sniff of a physiological sigh.
+                breath_tone_glide(&tone, BREATH_HZ_HIGH, BREATH_HZ_TOP,
+                                  MS_TO_SAMP(p->inhale2_ms), 0.9f);
+                tone_armed = true;
             } else if (cur == BREATH_PHASE_EXHALE) {
-                breath_tone_glide(&tone, BREATH_HZ_HIGH, BREATH_HZ_LOW,
+                // Patterns with a top-up release from its ceiling; the
+                // rest fall from the normal inhale end.
+                const float ex_start = p->inhale2_ms ? BREATH_HZ_TOP
+                                                     : BREATH_HZ_HIGH;
+                breath_tone_glide(&tone, ex_start, BREATH_HZ_LOW,
                                   MS_TO_SAMP(p->exhale_ms), 0.9f);
                 tone_armed = true;
             } else if (cur == BREATH_PHASE_READY) {
@@ -132,7 +146,8 @@ static void run_session(uint8_t pattern_idx, uint8_t dur_min) {
                 tone_armed = true;
                 prev_ready_left = st.phase_left_ms;
             }
-            // HOLD / HOLD2: silence (the glide release already faded out).
+            // HOLD / HOLD2 / custom rest: silence (the glide release
+            // already faded out).
         } else if (cur == BREATH_PHASE_READY) {
             // one tick per remaining second: 3, 2, 1
             if ((prev_ready_left > 1000 && st.phase_left_ms <= 1000) ||

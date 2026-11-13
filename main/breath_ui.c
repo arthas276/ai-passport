@@ -26,7 +26,8 @@
 #define ORB_MAX 160
 #define HOME_ROWS (BREATH_PATTERN_COUNT + 1)   // patterns + SETUP row
 #define SETUP_ROW (BREATH_PATTERN_COUNT)
-#define SETTINGS_ROWS 3u                         // DURATION / GLOW / VOLUME
+#define SETTINGS_ROWS 4u   // DURATION / GLOW / VOLUME / YOURS (v1.3)
+#define EDIT_ROWS 4u       // IN / HOLD / OUT / HOLD2 (v1.3)
 
 #define GLOW_LEVELS 3u
 static const uint8_t GLOW_PCT[GLOW_LEVELS] = { 100u, 12u, 0u };
@@ -46,8 +47,8 @@ static uint8_t dur_next(uint8_t dur_min) {
     return DUR_VALUES[(dur_index(dur_min) + 1u) % 4u];
 }
 
-typedef enum { SCR_HOME = 0, SCR_SETTINGS, SCR_VOLUME, SCR_SESSION,
-               SCR_SUMMARY } screen_id_t;
+typedef enum { SCR_HOME = 0, SCR_SETTINGS, SCR_VOLUME, SCR_EDIT,
+               SCR_SESSION, SCR_SUMMARY } screen_id_t;
 
 static screen_id_t s_scr_id;
 static lv_obj_t *s_scr;
@@ -58,6 +59,8 @@ static uint8_t s_set_sel;           // SETTINGS selection 0..SETTINGS_ROWS-1
 static uint8_t s_vol;               // VOLUME screen live value
 static uint8_t s_pattern;           // active session pattern
 static uint8_t s_dur;               // active session duration (minutes)
+static uint8_t s_edit_sel;          // EDIT selection 0..EDIT_ROWS-1 (v1.3)
+static uint8_t s_edit[EDIT_ROWS];   // EDIT live seconds (v1.3)
 static bool s_stopping;             // STOP sent, waiting for EV_DONE
 static bool s_dimmed;
 static uint32_t s_idle_ms;
@@ -68,6 +71,8 @@ static uint32_t s_milestone_min;    // the threshold that was reached
 static lv_obj_t *s_cards[HOME_ROWS], *s_subs[HOME_ROWS], *s_stats;
 static lv_obj_t *s_set_cards[SETTINGS_ROWS], *s_set_subs[SETTINGS_ROWS];
 static lv_obj_t *s_set_pill;
+static lv_obj_t *s_edit_cards[EDIT_ROWS], *s_edit_subs[EDIT_ROWS];
+static lv_obj_t *s_edit_pill;
 static lv_obj_t *s_vol_val, *s_vol_ind, *s_vol_pill, *s_sum_pill;
 static lv_obj_t *s_phase, *s_orb, *s_ring, *s_count, *s_cyc, *s_clock;
 
@@ -111,8 +116,45 @@ static void header(lv_obj_t *scr, const char *title) {
 static void enter_home(void);
 static void enter_settings(void);
 static void enter_volume(void);
+static void enter_edit(void);
 static void enter_session(void);
 static void enter_summary(void);
+
+// v1.3: live sub text for the YOURS row ("5 + 5" / "4 + 2 + 6 + 2").
+// A static buffer so the engine's copied pattern keeps a stable pointer.
+static char s_custom_sub[24];
+
+static void custom_sub_rebuild(void) {
+    size_t n = (size_t)snprintf(s_custom_sub, sizeof(s_custom_sub), "%u",
+                                s_save.c_in);
+    if (s_save.c_hold) {
+        n += (size_t)snprintf(s_custom_sub + n, sizeof(s_custom_sub) - n,
+                              " + %u", s_save.c_hold);
+    }
+    n += (size_t)snprintf(s_custom_sub + n, sizeof(s_custom_sub) - n,
+                          " + %u", s_save.c_out);
+    if (s_save.c_hold2) {
+        n += (size_t)snprintf(s_custom_sub + n, sizeof(s_custom_sub) - n,
+                              " + %u", s_save.c_hold2);
+    }
+    (void)n;
+}
+
+// Push the saved YOURS pattern into the engine runtime table and refresh
+// the sub shown on HOME and SETTINGS. Called at boot and after each edit.
+static void apply_custom(void) {
+    breath_pattern_t p = {
+        .label = "YOURS",
+        .sub = s_custom_sub,
+        .inhale_ms = (uint16_t)(s_save.c_in * 1000u),
+        .hold_ms = (uint16_t)(s_save.c_hold * 1000u),
+        .inhale2_ms = 0,   // classic four-phase shape
+        .exhale_ms = (uint16_t)(s_save.c_out * 1000u),
+        .hold2_ms = (uint16_t)(s_save.c_hold2 * 1000u),
+    };
+    custom_sub_rebuild();
+    breath_engine_set_custom(&p);   // store bounds make this always true
+}
 
 // Bottom hint pill: 232x34 rounded bar, one centered montserrat_14 line.
 // Every line must stay inside the 204 px text budget; tests/
@@ -159,6 +201,8 @@ static void refresh_home(void) {
              GLOW_NAMES[s_save.glow]);
     lv_label_set_text(s_subs[SETUP_ROW],
                       s_save.dur_min || s_save.glow ? sub : "FREE");
+    // YOURS shows the live custom summary, not the engine default copy.
+    lv_label_set_text(s_subs[BREATH_PATTERN_CUSTOM], s_custom_sub);
     lv_label_set_text_fmt(s_stats, "%lu min  -  %lu cycles",
                           (unsigned long)s_save.minutes,
                           (unsigned long)s_save.cycles);
@@ -169,15 +213,17 @@ static void enter_home(void) {
     lv_obj_t *scr = screen_create();
     header(scr, "BREATHE");
 
+    // v1.3: 8 rows (7 patterns + SETUP) at a 33 px pitch in 30 px cards;
+    // montserrat_20 (line height 23) fits the 24 px inner band with pad 3.
     for (uint8_t i = 0; i < HOME_ROWS; i++) {
-        int y = 40 + (int)i * 44;
+        int y = 38 + (int)i * 33;
         s_cards[i] = lv_obj_create(scr);
         lv_obj_set_pos(s_cards[i], 16, y);
-        lv_obj_set_size(s_cards[i], 208, 38);
-        lv_obj_set_style_radius(s_cards[i], 10, 0);
+        lv_obj_set_size(s_cards[i], 208, 30);
+        lv_obj_set_style_radius(s_cards[i], 8, 0);
         lv_obj_set_style_bg_color(s_cards[i], lv_color_hex(C_CARD), 0);
         lv_obj_set_style_border_width(s_cards[i], 0, 0);
-        lv_obj_set_style_pad_all(s_cards[i], 8, 0);
+        lv_obj_set_style_pad_all(s_cards[i], 3, 0);
         lv_obj_remove_flag(s_cards[i], LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *primary = lv_label_create(s_cards[i]);
@@ -203,9 +249,10 @@ static void enter_home(void) {
 }
 
 // ---------------------------------------------------------------------------
-// SETTINGS (v1.2): DURATION / GLOW / VOLUME. UP/DOWN walk the rows; OK on
-// DURATION and GLOW cycles the value directly (saved outside playback);
-// OK on VOLUME opens the big adjust screen.
+// SETTINGS (v1.2): DURATION / GLOW / VOLUME rows; v1.3 adds YOURS. UP/DOWN
+// walk the rows; OK on DURATION/GLOW cycles the value directly (saved
+// outside playback); OK on VOLUME opens the big adjust screen; OK on YOURS
+// opens the pace editor.
 // ---------------------------------------------------------------------------
 static void refresh_settings(void) {
     for (uint8_t i = 0; i < SETTINGS_ROWS; i++) {
@@ -216,6 +263,7 @@ static void refresh_settings(void) {
     lv_label_set_text(s_set_subs[0], DUR_NAMES[dur_index(s_save.dur_min)]);
     lv_label_set_text(s_set_subs[1], GLOW_NAMES[s_save.glow]);
     lv_label_set_text_fmt(s_set_subs[2], "%u%%", s_save.vol);
+    lv_label_set_text(s_set_subs[3], s_custom_sub);
 }
 
 static void enter_settings(void) {
@@ -224,12 +272,12 @@ static void enter_settings(void) {
     header(scr, "SETUP");
 
     static const char *const NAMES[SETTINGS_ROWS] =
-        { "DURATION", "GLOW", "VOLUME" };
+        { "DURATION", "GLOW", "VOLUME", "YOURS" };
     for (uint8_t i = 0; i < SETTINGS_ROWS; i++) {
-        int y = 60 + (int)i * 52;
+        int y = 56 + (int)i * 50;
         s_set_cards[i] = lv_obj_create(scr);
         lv_obj_set_pos(s_set_cards[i], 16, y);
-        lv_obj_set_size(s_set_cards[i], 208, 46);
+        lv_obj_set_size(s_set_cards[i], 208, 44);
         lv_obj_set_style_radius(s_set_cards[i], 10, 0);
         lv_obj_set_style_bg_color(s_set_cards[i], lv_color_hex(C_CARD), 0);
         lv_obj_set_style_border_width(s_set_cards[i], 0, 0);
@@ -252,6 +300,63 @@ static void enter_settings(void) {
     s_set_pill = hint_pill_create(scr);
     hint_pill_set(s_set_pill, "OK: SET   OK LONG: BACK");
     refresh_settings();
+}
+
+// ---------------------------------------------------------------------------
+// EDIT (v1.3): YOURS pace editor. Four value rows (IN/HOLD/OUT/HOLD2 in
+// seconds); UP/DOWN adjust the selected row with wrap (no dead keys at
+// the bounds), OK advances to the next row, OK on the last row saves and
+// returns to SETUP; long-press OK discards and returns.
+// ---------------------------------------------------------------------------
+static void refresh_edit(void) {
+    for (uint8_t i = 0; i < EDIT_ROWS; i++) {
+        bool sel = i == s_edit_sel;
+        lv_obj_set_style_border_width(s_edit_cards[i], sel ? 2 : 0, 0);
+        lv_obj_set_style_border_color(s_edit_cards[i], lv_color_hex(C_ACCENT), 0);
+        lv_label_set_text_fmt(s_edit_subs[i], "%u s", s_edit[i]);
+    }
+    hint_pill_set(s_edit_pill, s_edit_sel < EDIT_ROWS - 1u
+                                  ? "UP/DOWN: SEC  OK: NEXT"
+                                  : "OK: SAVE  LONG: CANCEL");
+}
+
+static void enter_edit(void) {
+    s_scr_id = SCR_EDIT;
+    s_edit_sel = 0;
+    s_edit[0] = s_save.c_in;
+    s_edit[1] = s_save.c_hold;
+    s_edit[2] = s_save.c_out;
+    s_edit[3] = s_save.c_hold2;
+    lv_obj_t *scr = screen_create();
+    header(scr, "YOURS");
+
+    static const char *const NAMES[EDIT_ROWS] = { "IN", "HOLD", "OUT", "HOLD2" };
+    for (uint8_t i = 0; i < EDIT_ROWS; i++) {
+        int y = 48 + (int)i * 56;
+        s_edit_cards[i] = lv_obj_create(scr);
+        lv_obj_set_pos(s_edit_cards[i], 16, y);
+        lv_obj_set_size(s_edit_cards[i], 208, 48);
+        lv_obj_set_style_radius(s_edit_cards[i], 10, 0);
+        lv_obj_set_style_bg_color(s_edit_cards[i], lv_color_hex(C_CARD), 0);
+        lv_obj_set_style_border_width(s_edit_cards[i], 0, 0);
+        lv_obj_set_style_pad_all(s_edit_cards[i], 10, 0);
+        lv_obj_remove_flag(s_edit_cards[i], LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *primary = lv_label_create(s_edit_cards[i]);
+        lv_obj_set_style_text_font(primary, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(primary, lv_color_hex(C_INK), 0);
+        lv_obj_align(primary, LV_ALIGN_LEFT_MID, 4, 0);
+        lv_label_set_text(primary, NAMES[i]);
+
+        s_edit_subs[i] = lv_label_create(s_edit_cards[i]);
+        lv_obj_set_style_text_font(s_edit_subs[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_edit_subs[i], lv_color_hex(C_DIM), 0);
+        lv_obj_align(s_edit_subs[i], LV_ALIGN_RIGHT_MID, -4, 0);
+        lv_label_set_text(s_edit_subs[i], "");
+    }
+
+    s_edit_pill = hint_pill_create(scr);
+    refresh_edit();
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +409,7 @@ static const char *phase_word(breath_phase_t ph) {
     case BREATH_PHASE_READY:   return "GET READY";
     case BREATH_PHASE_INHALE:  return "BREATHE IN";
     case BREATH_PHASE_HOLD:    return "HOLD";
+    case BREATH_PHASE_INHALE2: return "TOP UP";
     case BREATH_PHASE_EXHALE:  return "BREATHE OUT";
     default:                   return "HOLD";
     }
@@ -316,6 +422,9 @@ static void update_session(const breath_state_t *st) {
     switch (st->phase) {
     case BREATH_PHASE_INHALE:  d = ORB_MIN + (ORB_MAX - ORB_MIN) * st->progress / 4096; break;
     case BREATH_PHASE_HOLD:    d = ORB_MAX; break;
+    // Top-up inhale: resume from three quarters of the span and finish the
+    // growth, so a sigh reads as one continuous rise with a second step.
+    case BREATH_PHASE_INHALE2: d = ORB_MIN + (ORB_MAX - ORB_MIN) * (12288u + st->progress) / 16384u; break;
     case BREATH_PHASE_EXHALE:  d = ORB_MAX - (ORB_MAX - ORB_MIN) * st->progress / 4096; break;
     default:                   d = ORB_MIN; break;   // READY / HOLD2 rest
     }
@@ -399,7 +508,7 @@ static void enter_session(void) {
     lv_label_set_text(s_clock, "0:00");
 
     breath_state_t st;
-    breath_engine_at(&BREATH_PATTERNS[s_pattern], 0, &st);
+    breath_engine_at(breath_engine_pattern(s_pattern), 0, &st);
     update_session(&st);
 }
 
@@ -501,9 +610,11 @@ void breath_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         return;
     }
     if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) {
-        // VOLUME discards its live value; SETTINGS returns HOME.
+        // VOLUME discards its live value; SETTINGS returns HOME; EDIT
+        // discards the pace edits and returns to SETTINGS.
         if (s_scr_id == SCR_VOLUME) enter_settings();
         else if (s_scr_id == SCR_SETTINGS) enter_home();
+        else if (s_scr_id == SCR_EDIT) enter_settings();
         return;
     }
     if (ev != BSP_BTN_CLICK) return;
@@ -541,12 +652,40 @@ void breath_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 s_save.dur_min = dur_next(s_save.dur_min);
             } else if (s_set_sel == 1) {
                 s_save.glow = (uint8_t)((s_save.glow + 1u) % GLOW_LEVELS);
-            } else {
+            } else if (s_set_sel == 2) {
                 enter_volume();
+            } else {
+                enter_edit();   // v1.3: YOURS pace editor
                 break;
             }
             breath_store_save(&s_save);   // playback is idle here (8.1)
             refresh_settings();
+        }
+        break;
+
+    case SCR_EDIT:
+        // Bounds wrap (1..10 in/out, 0..10 holds) so no key press is a
+        // silent no-op at an edge; a wrap is visible as a value change.
+        if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
+            const int8_t d = btn == BSP_BTN_UP ? 1 : -1;
+            const uint8_t lo = (s_edit_sel == 0 || s_edit_sel == 2) ? 1u : 0u;
+            const uint8_t span = 10u - lo + 1u;
+            s_edit[s_edit_sel] = (uint8_t)(lo + ((int)s_edit[s_edit_sel] - lo +
+                                    d + (int)span) % (int)span);
+            refresh_edit();
+        } else if (btn == BSP_BTN_OK) {
+            if (s_edit_sel < EDIT_ROWS - 1u) {
+                s_edit_sel++;
+                refresh_edit();
+            } else {
+                s_save.c_in = s_edit[0];
+                s_save.c_hold = s_edit[1];
+                s_save.c_out = s_edit[2];
+                s_save.c_hold2 = s_edit[3];
+                breath_store_save(&s_save);   // playback is idle here
+                apply_custom();
+                enter_settings();
+            }
         }
         break;
 
@@ -612,6 +751,8 @@ void breath_ui_on_second(void) {
 
 void breath_ui_init(void) {
     breath_store_load(&s_save);
+    breath_engine_init();      // runtime table defaults before any use
+    apply_custom();            // store -> YOURS slot + live sub
     breath_audio_set_volume(s_save.vol);
     enter_home();
     bsp_display_backlight(100);
