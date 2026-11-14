@@ -5,15 +5,15 @@
 > Status: Taken over from an external delivery bundle, maintained in this repo since 2026-10-25; pending on-device verification
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/slang (from upstream main)
-> PRD version: v1.3 (2026-11-03: LXGW WenKai typeface; flattened single-card layout; font stride fix)
-> History: v1.2 (2026-10-29: glyph baseline fix; "Night Reading" UI redesign); v1.1 (2026-10-25: takeover curation — 160 curated slang entries, letter picker lists only non-empty initials, 5-minute timer wake removed)
+> PRD version: v1.4 (2026-11-14: catalog refresh to 197 entries — 37 durable 2023–2025 additions, font subsets regenerated)
+> History: v1.3 (2026-11-03: LXGW WenKai typeface; flattened single-card layout; font stride fix); v1.2 (2026-10-29: glyph baseline fix; "Night Reading" UI redesign); v1.1 (2026-10-25: takeover curation — 160 curated slang entries, letter picker lists only non-empty initials, 5-minute timer wake removed)
 > Mode: written by an external program, maintained here; the entry table and lookup core are pure logic and host-testable
 <a href="README.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
 # Offline slang dictionary
 
-This is a small offline dictionary for the FoloToy AI Passport. 160 curated common internet slang phrases and a one-line explanation are compiled into the firmware. It works without a network and does not follow the day's trending list.
+This is a small offline dictionary for the FoloToy AI Passport. 197 curated common internet slang phrases and a one-line explanation are compiled into the firmware. It works without a network and does not follow the day's trending list.
 
 ## Use
 
@@ -52,6 +52,6 @@ Tokens (deep-navy night theme, all AA):
 | secondary | #D7E2EA | reading / battery | 10.4:1 |
 | muted | #8EA0B0 | hints / index | 5.1:1 |
 
-Layout budget (240x320): top bar y=10 (left "160 entries" in gold, right battery right-aligned); card x=12 y=40 w=216 h=212 r=16 with title 20px (longest entry 8 chars, single line), reading line +16,+84 16px (pinyin only when the reading equals the title — 157/160 entries; "reading · pinyin" otherwise, worst case 115 px), divider +116, gloss +128 16px (up to 16 chars = 2 lines to y=168), short gloss +176 16px (max 6 chars, single line to y=196); letter page centered big letter; footer y=292 with left hint and right-aligned index. Line height comes from real font metrics (16 px → 20, 20 px → 25); the field-length caps (8/8/7/6/16 across title/reading/pinyin/short_gloss/gloss) were measured across all 160 entries and are enforced by host tests.
+Layout budget (240x320): top bar y=10 (left "197 entries" in gold, right battery right-aligned); card x=12 y=40 w=216 h=212 r=16 with title 20px (longest entry 8 chars, single line), reading line +16,+84 16px (pinyin only when the reading equals the title — 194/197 entries; "reading · pinyin" otherwise, worst case 115 px), divider +116, gloss +128 16px (up to 16 chars = 2 lines to y=168), short gloss +176 16px (max 6 chars, single line to y=196); letter page centered big letter; footer y=292 with left hint and right-aligned index. Line height comes from real font metrics (16 px → 20, 20 px → 25); the field-length caps (8/8/7/6/16 across title/reading/pinyin/short_gloss/gloss) were measured across all 197 entries and are enforced by host tests.
 
 Per repo convention, the tokens and budgets above were derived with the ui-ux-pro-max skill before touching UI code.
