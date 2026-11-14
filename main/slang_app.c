@@ -145,7 +145,7 @@ static void show_list(void) {
     const slang_entry_t *entry = slang_at(s_matches[s_selected]);
     if (entry) {
         lv_label_set_text(s_title, entry->title);
-        /* 读法与词条相同则只显拼音（157/160 条），不同才拼「读法 · 拼音」，最宽 115px ≤ 184 */
+        /* 读法与词条相同则只显拼音（194/197 条），不同才拼「读法 · 拼音」，最宽 115px ≤ 184 */
         if (strcmp(entry->reading, entry->title) == 0) lv_label_set_text(s_meta, entry->pinyin);
         else lv_label_set_text_fmt(s_meta, "%s · %s", entry->reading, entry->pinyin);
         lv_label_set_text(s_gloss, entry->gloss);

@@ -13,7 +13,7 @@ static void expect(int condition, const char *message) {
 }
 
 static void test_catalog(void) {
-    expect(slang_count() == 160u, "curated catalog size");
+    expect(slang_count() == 197u, "curated catalog size");
     for (uint16_t i = 0; i < slang_count(); ++i) {
         const slang_entry_t *entry = slang_at(i);
         expect(entry && entry->title[0] && entry->pinyin[0] && entry->gloss[0], "complete entry");
