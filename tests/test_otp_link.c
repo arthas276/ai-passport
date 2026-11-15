@@ -53,6 +53,12 @@ int main(void)
     assert(!otp_link_parse("TIME now", &m, &err));
     assert(!otp_link_parse("TIME", &m, &err));
 
+    // TIME?: no-argument readback accepted; any argument rejected.
+    assert(otp_link_parse("TIME?", &m, &err));
+    assert(m.cmd == OTP_LINK_CMD_TIME_GET);
+    assert(otp_link_parse("time?\r", &m, &err));
+    assert(!otp_link_parse("TIME? 123", &m, &err));
+
     // DEL: valid name carried; invalid name or missing name rejected.
     assert(otp_link_parse("DEL MY SITE", &m, &err));
     assert(m.cmd == OTP_LINK_CMD_DEL && strcmp(m.account.name, "MY SITE") == 0);

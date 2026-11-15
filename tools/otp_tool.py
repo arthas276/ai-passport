@@ -6,6 +6,7 @@ Usage:
   python tools/otp_tool.py --port COM3 add "otpauth://totp/Example:alice@example.com?secret=GEZDGNBV...&issuer=Example"
   python tools/otp_tool.py --port COM3 add --qr qr-screenshot.png
   python tools/otp_tool.py --port COM3 time          # sync from this PC's clock
+  python tools/otp_tool.py --port COM3 timeget       # read device clock, show drift vs this PC
   python tools/otp_tool.py --port COM3 del "SITE"
   python tools/otp_tool.py --port COM3 list
   python tools/otp_tool.py --port COM3 export        # print NAME SECRET per account
@@ -127,6 +128,7 @@ def main():
     a.add_argument("secret", nargs="?", help="Base32 secret")
     a.add_argument("--qr", metavar="FILE", help="image containing the service's QR code")
     sub.add_parser("time", help="sync device clock from this PC")
+    sub.add_parser("timeget", help="read the device clock and show drift vs this PC")
     d = sub.add_parser("del", help="delete an account by name")
     d.add_argument("name")
     sub.add_parser("list", help="list account names (never secrets)")
@@ -154,6 +156,20 @@ def main():
                 print("check the code now shown on the device's PC-link page against the phone app")
         elif args.cmd == "time":
             print(exchange(ser, "TIME %d" % int(time.time()))[0])
+        elif args.cmd == "timeget":
+            t0 = time.time()
+            term, data = exchange(ser, "TIME?")
+            t1 = time.time()
+            dev = None
+            for d in data:
+                if d.startswith("TIME "):
+                    dev = int(d[5:])
+            if dev is None:
+                raise SystemExit("device sent no TIME line (got %r)" % ([term] + data))
+            if dev <= 0:
+                raise SystemExit("device clock was never calibrated; run 'time' or on-device 设置时间 first")
+            mid = (t0 + t1) / 2.0
+            print("device %d  host %d  drift %+.1f s" % (dev, int(mid), mid - dev))
         elif args.cmd == "del":
             print(exchange(ser, "DEL %s" % sanitize_name(args.name))[0])
         elif args.cmd == "list":

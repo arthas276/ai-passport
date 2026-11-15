@@ -15,6 +15,7 @@ typedef enum {
     OTP_SCREEN_NAME,
     OTP_SCREEN_SECRET,
     OTP_SCREEN_CLOCK,
+    OTP_SCREEN_ADJUST,
     OTP_SCREEN_CONFIRM,
     OTP_SCREEN_LINK,
     OTP_SCREEN_VERIFY,
@@ -24,6 +25,7 @@ typedef enum {
 typedef enum {
     OTP_MENU_ADD = 0,
     OTP_MENU_CLOCK,
+    OTP_MENU_ADJUST,
     OTP_MENU_DELETE,
     OTP_MENU_LINK,
     OTP_MENU_COUNT,
@@ -41,6 +43,7 @@ typedef struct {
     char name[OTP_NAME_MAX + 1u];
     char secret[64];
     char pending_code[OTP_DIGITS + 1u];
+    int8_t adjust_offset;
     char status[48];
     bool battery_ok;
     bool buttons_ok;

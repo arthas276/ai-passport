@@ -19,7 +19,9 @@
 #include "lvgl.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 LV_FONT_DECLARE(otp_font_20);
 
@@ -131,11 +133,11 @@ static void render_code(void) {
             lv_label_set_text(s_detail, "无法计算");
         }
     }
-    lv_label_set_text(s_footer, "长按下联机");
+    lv_label_set_text(s_footer, "上下菜单  长按下联机");
 }
 
 static void render_menu(void) {
-    static const char *items[] = {"新增账号", "设置时间", "删除账号", "电脑联机"};
+    static const char *items[] = {"新增账号", "设置时间", "时间微调", "删除账号", "电脑联机"};
     lv_label_set_text(s_title, "设置");
     lv_label_set_text(s_body, items[s_app.menu_item]);
     lv_label_set_text_fmt(s_detail, "%u / %u", s_app.menu_item + 1u, OTP_MENU_COUNT);
@@ -161,6 +163,24 @@ static void render_clock(void) {
     lv_label_set_text(s_body, s_app.pending_code);
     lv_label_set_text(s_detail, "输入另一设备验证码");
     lv_label_set_text(s_footer, "OK下一位  长按校验");
+}
+
+static void render_adjust(void) {
+    lv_label_set_text(s_title, "时间微调");
+    if (!s_app.store.clock_ready) {
+        lv_label_set_text(s_body, "未校正时间");
+        lv_label_set_text(s_detail, "先用 设置时间 校准");
+        lv_label_set_text(s_footer, "长按返回");
+        return;
+    }
+    time_t now = (time_t)otp_store_now(&s_app.store);
+    struct tm tm_now;
+    localtime_r(&now, &tm_now);
+    lv_label_set_text_fmt(s_body, "%02u:%02u:%02u",
+                          (unsigned)tm_now.tm_hour, (unsigned)tm_now.tm_min,
+                          (unsigned)tm_now.tm_sec);
+    lv_label_set_text_fmt(s_detail, "偏移 %+d 秒", (int)s_app.adjust_offset);
+    lv_label_set_text(s_footer, "OK应用  长按取消");
 }
 
 static void render_verify(void) {
@@ -234,6 +254,7 @@ static void render(void) {
     case OTP_SCREEN_NAME: render_editor(false); break;
     case OTP_SCREEN_SECRET: render_editor(true); break;
     case OTP_SCREEN_CLOCK: render_clock(); break;
+    case OTP_SCREEN_ADJUST: render_adjust(); break;
     case OTP_SCREEN_CONFIRM: render_confirm(); break;
     case OTP_SCREEN_VERIFY: render_verify(); break;
     case OTP_SCREEN_ERROR: render_error(); break;
@@ -435,6 +456,10 @@ static void link_apply(const otp_link_msg_t *msg) {
             snprintf(s_link_last, sizeof(s_link_last), "时间已同步");
         }
         break;
+    case OTP_LINK_CMD_TIME_GET:
+        snprintf(reply, sizeof(reply), "TIME %llu\nOK TIME\n",
+                 (unsigned long long)otp_store_now(&s_app.store));
+        break;
     case OTP_LINK_CMD_DEL: {
         int idx = -1;
         for (uint8_t i = 0; i < s_app.store.count; i++) {
@@ -577,7 +602,8 @@ static void tick(lv_timer_t *timer) {
         battery_refresh();
     }
     if (s_app.screen == OTP_SCREEN_LIST || s_app.screen == OTP_SCREEN_CODE ||
-        s_app.screen == OTP_SCREEN_VERIFY || s_app.screen == OTP_SCREEN_LINK) render();
+        s_app.screen == OTP_SCREEN_VERIFY || s_app.screen == OTP_SCREEN_LINK ||
+        s_app.screen == OTP_SCREEN_ADJUST) render();
     if (otp_power_should_sleep(&s_power)) enter_sleep();
 }
 
@@ -599,6 +625,7 @@ static void handle_key(int button, int event) {
             s_app.screen = OTP_SCREEN_LIST;
         }
         else if (s_app.screen == OTP_SCREEN_ERROR) s_app.screen = s_app.return_screen;
+        else if (s_app.screen == OTP_SCREEN_ADJUST) s_app.screen = OTP_SCREEN_MENU;
         else s_app.screen = OTP_SCREEN_LIST;
         render();
         return;
@@ -630,6 +657,9 @@ static void handle_key(int button, int event) {
             } else if (s_app.menu_item == OTP_MENU_CLOCK) {
                 clear_draft();
                 s_app.screen = OTP_SCREEN_CLOCK;
+            } else if (s_app.menu_item == OTP_MENU_ADJUST) {
+                s_app.adjust_offset = 0;
+                s_app.screen = OTP_SCREEN_ADJUST;
             } else if (s_app.menu_item == OTP_MENU_LINK) {
                 link_start();
                 s_app.screen = OTP_SCREEN_LINK;
@@ -686,6 +716,21 @@ static void handle_key(int button, int event) {
             s_app.screen = OTP_SCREEN_LIST;
         }
         break;
+    case OTP_SCREEN_ADJUST:
+        if (!s_app.store.clock_ready) break;
+        if (button == BSP_BTN_UP && s_app.adjust_offset < 59) s_app.adjust_offset++;
+        else if (button == BSP_BTN_DOWN && s_app.adjust_offset > -59) s_app.adjust_offset--;
+        else if (button == BSP_BTN_OK) {
+            uint64_t now = otp_store_now(&s_app.store);
+            otp_store_set_clock(&s_app.store,
+                                (uint64_t)((int64_t)now + s_app.adjust_offset));
+            if (otp_store_save(&s_app.store) != ESP_OK) open_error("保存失败");
+            else {
+                set_status("时间已微调");
+                s_app.screen = OTP_SCREEN_MENU;
+            }
+        }
+        break;
     case OTP_SCREEN_VERIFY:
         if (button == BSP_BTN_OK) (void)commit_verify();
         break;
@@ -727,6 +772,9 @@ void otp_button_event(int button, int event) {
 esp_err_t otp_app_start(void) {
     memset(&s_app, 0, sizeof(s_app));
     memset(&s_verify, 0, sizeof(s_verify));
+    /* 屏上时间显示用东八区墙钟（微调页 HH:MM:SS 与手机对表）。 */
+    setenv("TZ", "CST-8", 1);
+    tzset();
     s_link_code_idx = -1;
     otp_power_reset(&s_power);
     clear_draft();

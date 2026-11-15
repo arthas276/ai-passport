@@ -100,6 +100,14 @@ bool otp_link_parse(const char *line, otp_link_msg_t *msg, const char **err) {
         msg->unix_sec = (uint64_t)v;
         return true;
     }
+    if (strcasecmp(buf, "TIME?") == 0) {
+        if (rest && *rest) {
+            *err = "TIME? 不带参数";
+            return false;
+        }
+        msg->cmd = OTP_LINK_CMD_TIME_GET;
+        return true;
+    }
     if (strcasecmp(buf, "DEL") == 0) {
         if (!rest || !*rest) {
             *err = "用法 DEL 名称";
