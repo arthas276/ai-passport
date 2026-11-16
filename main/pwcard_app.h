@@ -12,16 +12,18 @@ typedef enum {
     PW_SCREEN_CARD = 0,     // S1: the 8x10 derived card grid
     PW_SCREEN_SITES,        // S2: site list
     PW_SCREEN_PASS,         // S3: masked / revealed site password
-    PW_SCREEN_WIZARD,       // S4: add-site wizard (row, col, len, name)
-    PW_SCREEN_SETTINGS,     // S5: regenerate / seed / clear / help
-    PW_SCREEN_CONFIRM,      // double-confirm for regen and clear
-    PW_SCREEN_SEED,         // seed hex view
+    PW_SCREEN_WIZARD,       // S4: add/edit-site wizard (mode,row,col,len,name)
+    PW_SCREEN_SETTINGS,     // S5: regen / seed / restore / clear / help
+    PW_SCREEN_CONFIRM,      // double-confirm for regen, clear, delete, restore
+    PW_SCREEN_SEED,         // seed hex view (+CRC)
+    PW_SCREEN_SEEDIN,       // v1.2: type a seed in from another device
     PW_SCREEN_HELP,         // how-to overlay (first boot + from settings)
     PW_SCREEN_N,
 } pw_screen_t;
 
 #define PW_REVEAL_MS 8000u
 #define PW_SITES_VISIBLE 8u
+#define PW_WIZ_EDIT_NONE 0xFFu
 
 typedef struct {
     pw_screen_t screen;
@@ -31,11 +33,16 @@ typedef struct {
     uint8_t site_cursor;                      // SITES
     uint8_t site_top;                         // SITES scroll window
     uint32_t reveal_ms;                       // PASS: 0 = masked
-    uint8_t wiz_step;                         // WIZARD: 0 row 1 col 2 len 3 name
+    uint8_t wiz_step;                         // WIZARD: 0 mode 1 row 2 col 3 len 4 name
     uint8_t wiz_row, wiz_col, wiz_len;        // WIZARD picks
+    uint8_t wiz_mode;                         // WIZARD pick: pw_mode_t
+    uint8_t wiz_edit_idx;                     // WIZARD: PW_WIZ_EDIT_NONE or site index
     pw_name_input_t wiz_input;                // WIZARD name typing wheel
+    pw_hex_input_t seedin;                    // SEEDIN hex typing wheel
     uint8_t set_cursor;                       // SETTINGS
-    uint8_t confirm_what;                     // CONFIRM: 0 regen 1 clear
+    uint8_t confirm_what;                     // CONFIRM: 0 regen 1 clear 2 delete 3 restore
+    uint8_t confirm_idx;                      // CONFIRM: site index for what==2
+    pw_screen_t confirm_back;                 // CONFIRM: cancel returns here
     bool help_back_settings;                  // HELP return target
 } pw_app_t;
 

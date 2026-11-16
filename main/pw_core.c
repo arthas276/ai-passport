@@ -90,10 +90,47 @@ void pw_seed_hex(const uint8_t seed[PW_SEED_BYTES],
     out[2u * PW_SEED_BYTES] = '\0';
 }
 
+uint8_t pw_seed_crc8(const uint8_t seed[PW_SEED_BYTES]) {
+    uint8_t crc = 0u;
+    for (uint32_t i = 0; i < PW_SEED_BYTES; i++) {
+        crc ^= seed[i];
+        for (uint32_t b = 0; b < 8u; b++) {
+            crc = (uint8_t)((crc & 0x80u) ? ((crc << 1u) ^ 0x07u)
+                                          : (crc << 1u));
+        }
+    }
+    return crc;
+}
+
+void pw_pin(const uint8_t seed[PW_SEED_BYTES], uint8_t row, uint8_t col,
+            uint8_t len, char out[PW_PIN_LEN_MAX + 1u]) {
+    uint8_t tagged[PW_SEED_BYTES];
+    memcpy(tagged, seed, PW_SEED_BYTES);
+    // domain tag "PIN1": never correlate with the card stream of the same seed
+    tagged[0] ^= 0x50u;
+    tagged[1] ^= 0x49u;
+    tagged[2] ^= 0x4Eu;
+    tagged[3] ^= 0x31u;
+    pw_rng_t rng;
+    pw_rng_seed(&rng, tagged);
+    const uint32_t skip = ((uint32_t)row * PW_COLS_N) + col;
+    for (uint32_t i = 0; i < skip; i++) (void)pw_rng_next(&rng);
+    for (uint32_t i = 0; i < len; i++) {
+        out[i] = (char)('0' + (pw_rng_next(&rng) % 10u));
+    }
+    out[len] = '\0';
+}
+
 bool pw_site_valid(const pw_site_t *site) {
     if (!site) return false;
     if (site->row >= PW_ROWS_N || site->col >= PW_COLS_N) return false;
-    if (site->len < PW_LEN_MIN || site->len > PW_LEN_MAX) return false;
+    if (site->mode != PW_MODE_STD && site->mode != PW_MODE_PIN) return false;
+    if (site->mode == PW_MODE_PIN) {
+        if (site->len < PW_PIN_LEN_MIN || site->len > PW_PIN_LEN_MAX)
+            return false;
+    } else {
+        if (site->len < PW_LEN_MIN || site->len > PW_LEN_MAX) return false;
+    }
     bool nul = false;
     const uint32_t wheel = pw_name_charset_len();
     for (uint32_t i = 0; i <= PW_NAME_MAX; i++) {
@@ -138,4 +175,80 @@ pw_name_result_t pw_name_ok(pw_name_input_t *input) {
     input->len++;
     input->name[input->len] = '\0';
     return PW_NAME_TYPED;
+}
+
+static bool pw_v1_site_valid(const pw_store_v1_t *old, uint32_t i) {
+    pw_site_t probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.row = old->sites[i].row;
+    probe.col = old->sites[i].col;
+    probe.len = old->sites[i].len;
+    probe.mode = PW_MODE_STD;
+    memcpy(probe.name, old->sites[i].name, sizeof(probe.name));
+    if (probe.len < PW_LEN_MIN || probe.len > 12u) return false;  // v1 cap
+    return pw_site_valid(&probe);
+}
+
+bool pw_store_migrate_v1(const pw_store_v1_t *old, pw_store_t *out) {
+    if (!old || !out) return false;
+    if (old->version != 1u) return false;
+    if (old->site_count > PW_SITES_MAX) return false;
+    for (uint32_t i = 0; i < old->site_count; i++) {
+        if (!pw_v1_site_valid(old, i)) return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->version = PW_STORE_VERSION;
+    memcpy(out->seed, old->seed, PW_SEED_BYTES);
+    out->site_count = old->site_count;
+    out->help_seen = old->help_seen;
+    for (uint32_t i = 0; i < old->site_count; i++) {
+        pw_site_t *dst = &out->sites[i];
+        dst->row = old->sites[i].row;
+        dst->col = old->sites[i].col;
+        dst->len = old->sites[i].len;
+        dst->mode = PW_MODE_STD;
+        memcpy(dst->name, old->sites[i].name, sizeof(dst->name));
+    }
+    return true;
+}
+
+char pw_hex_wheel_char(uint32_t idx) {
+    if (idx < PW_HEX_CHARS_N) return "0123456789abcdef"[idx];
+    return '\0';
+}
+
+void pw_hex_reset(pw_hex_input_t *input) {
+    memset(input, 0, sizeof(*input));
+}
+
+pw_hex_result_t pw_hex_ok(pw_hex_input_t *input) {
+    if (input->cursor == PW_HEX_IDX_DELETE) {
+        if (input->len == 0) return PW_HEX_DELETED;
+        input->len--;
+        input->text[input->len] = '\0';
+        return PW_HEX_DELETED;
+    }
+    if (input->cursor == PW_HEX_IDX_DONE) return PW_HEX_DONE;
+    if (input->len >= PW_HEX_INPUT_MAX) return PW_HEX_FULL;
+    input->text[input->len] = pw_hex_wheel_char(input->cursor);
+    input->len++;
+    input->text[input->len] = '\0';
+    return PW_HEX_TYPED;
+}
+
+bool pw_seed_from_hex(const char hex[2u * PW_SEED_BYTES + 1u],
+                      uint8_t out[PW_SEED_BYTES]) {
+    static const char *digits = "0123456789abcdef";
+    if (!hex || !out) return false;
+    for (uint32_t i = 0; i < PW_SEED_BYTES; i++) {
+        uint8_t byte = 0u;
+        for (uint32_t half = 0; half < 2u; half++) {
+            const char c = hex[(i * 2u) + half];
+            const char *p = strchr(digits, c);
+            if (!p || p >= digits + 16u) return false;
+            byte = (uint8_t)((byte << 4u) | (uint8_t)(p - digits));
+        }
+        out[i] = byte;
+    }
+    return true;
 }

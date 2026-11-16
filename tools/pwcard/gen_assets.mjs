@@ -19,17 +19,20 @@ const lvfc = flag("--lvfc") || "D:/claude/idiom-staging/node_modules/lv_font_con
 // Format-string samples: runtime-formatted ASCII (digits, letters, step
 // chips, battery) must be seeded explicitly - the glyph audit only covers
 // literal strings, and a missing digit renders as a tofu box on device.
-// Full 0-9: summaries print row numbers and lengths 4-12 ("12位" needs 2).
-const SAMPLES = ["0123456789", "3行C列8位", "1/4", "AJ", "87%"];
+// Full 0-9: summaries print row numbers and lengths 4-16 ("16位" needs 2).
+const SAMPLES = ["0123456789", "3行C列8位", "1/5", "AJ", "87%"];
 
 // Named UI strings: emitted as readable #define STR_XXX "...".
 const STRINGS = [
   ["STR_APP_NAME", "密码卡"],
   ["STR_SITES_TITLE", "站点"],
   ["STR_WIZ_TITLE", "添加站点"],
+  ["STR_WIZ_EDIT", "编辑站点"],
   ["STR_CARD_FOOT", "OK 站点 · 长按 设置"],
   ["STR_SITES_FOOT", "OK 看 · 长按 回卡"],
   ["STR_PASS_FOOT", "OK 显示 · 长按 返回"],
+  ["STR_PASS_HINT_DEL", "长按上键 删除"],
+  ["STR_PASS_HINT_EDIT", "长按下键 编辑"],
   ["STR_PASS_NOTE", "8秒后遮蔽"],
   ["STR_WIZ_FOOT", "OK 下一步 · 长按 取消"],
   ["STR_WIZ_NAME_FOOT", "OK 选字 · 长按 取消"],
@@ -38,20 +41,28 @@ const STRINGS = [
   ["STR_STEP_ROW", "行"],
   ["STR_STEP_COL", "列"],
   ["STR_STEP_LEN", "长度"],
+  ["STR_STEP_MODE", "模式"],
+  ["STR_MODE_PW", "密码"],
   ["STR_STEP_NAME", "名称"],
   ["STR_UNIT_LEN", "位"],
   ["STR_SET_TITLE", "设置"],
   ["STR_SET_REGEN", "重生成卡"],
   ["STR_SET_SEED", "查看种子"],
+  ["STR_SET_RESTORE", "恢复种子"],
   ["STR_SET_CLEAR", "清空站点"],
   ["STR_SET_HELP", "玩法说明"],
   ["STR_SET_FOOT", "OK 进 · 长按 回卡"],
   ["STR_CONFIRM_REGEN", "旧密码将全部失效"],
   ["STR_CONFIRM_CLEAR", "删掉全部站点?"],
+  ["STR_CONFIRM_DELETE", "删除该站点?"],
+  ["STR_CONFIRM_RESTORE", "换种子 密码将全变"],
   ["STR_CONFIRM_FOOT", "OK 确认 · 长按 取消"],
   ["STR_TOAST_REGEN", "已重生成"],
   ["STR_TOAST_CLEAR", "已清空"],
   ["STR_TOAST_SAVED", "已保存"],
+  ["STR_TOAST_DELETED", "已删除"],
+  ["STR_TOAST_RESTORED", "已恢复"],
+  ["STR_SEED_INVALID", "种子无效"],
   ["STR_SITES_FULL", "站点已满"],
   ["STR_SEED_TITLE", "种子"],
   ["STR_SEED_HINT", "换设备时 抄写种子"],

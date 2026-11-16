@@ -1,9 +1,9 @@
-// main/pwcard_app.c - 密码卡 UI and state machine: eight LVGL screens (card
-// grid, site list, password reveal, add wizard, settings, double-confirm,
-// seed view, help), a button queue drained under the LVGL lock, and the
-// repo-standard idle dim -> deep sleep policy. Derivation lives in pw_core.c,
-// persistence in pw_store.c. Theme: cyan utility dark line, contrast pairs
-// audited in docs/PRD_PWCARD.md.
+// main/pwcard_app.c - 密码卡 UI and state machine: nine LVGL screens (card
+// grid, site list, password reveal, add/edit wizard, settings, quad-confirm,
+// seed view, seed entry, help), a button queue drained under the LVGL lock,
+// and the repo-standard idle dim -> deep sleep policy. Derivation lives in
+// pw_core.c, persistence in pw_store.c. Theme: cyan utility dark line,
+// contrast pairs audited in docs/PRD_PWCARD.md.
 #include "pwcard_app.h"
 #include "pw_power.h"
 #include "pwcard_strings.h"
@@ -88,7 +88,10 @@ static lv_obj_t *s_pass_sum;
 static lv_obj_t *s_pass_label;
 static lv_obj_t *s_pass_bar;
 static lv_obj_t *s_pass_note;
+static lv_obj_t *s_pass_hint_del;    // v1.2: long-press UP deletes this site
+static lv_obj_t *s_pass_hint_edit;   // v1.2: long-press DOWN edits this site
 // WIZARD
+static lv_obj_t *s_wiz_title;
 static lv_obj_t *s_wiz_chip;
 static lv_obj_t *s_wiz_value;
 static lv_obj_t *s_wiz_unit;
@@ -96,13 +99,20 @@ static lv_obj_t *s_wiz_name_lbl;
 static lv_obj_t *s_wiz_wheel[7];
 static lv_obj_t *s_wiz_wheel_lbl[7];
 // SETTINGS
-static lv_obj_t *s_set_items[4];
+static lv_obj_t *s_set_items[5];
 static lv_obj_t *s_set_cursor;
 // CONFIRM
 static lv_obj_t *s_confirm_msg;
 // SEED
 static lv_obj_t *s_seed_line1;
 static lv_obj_t *s_seed_line2;
+static lv_obj_t *s_seed_crc;
+// SEEDIN (v1.2 seed-entry wheel)
+static lv_obj_t *s_seedin_line1;
+static lv_obj_t *s_seedin_line2;
+static lv_obj_t *s_seedin_status;
+static lv_obj_t *s_seedin_wheel[7];
+static lv_obj_t *s_seedin_wheel_lbl[7];
 
 static void show_screen(pw_screen_t next);
 
@@ -384,13 +394,17 @@ static void build_pass(void) {
     lv_obj_set_style_bg_opa(s_pass_bar, LV_OPA_COVER, LV_PART_MAIN);
     s_pass_note = make_label(scr, 156, 240, TEXT_MUTED, &pw_font_22);
     lv_label_set_text(s_pass_note, STR_PASS_NOTE);
+    s_pass_hint_del = make_label(scr, 244, 240, TEXT_MUTED, &pw_font_22);
+    lv_label_set_text(s_pass_hint_del, STR_PASS_HINT_DEL);
+    s_pass_hint_edit = make_label(scr, 268, 240, TEXT_MUTED, &pw_font_22);
+    lv_label_set_text(s_pass_hint_edit, STR_PASS_HINT_EDIT);
     s_foot[PW_SCREEN_PASS] = make_footer(scr, STR_PASS_FOOT);
 }
 
-// Widest-case check: a 12-char "WWWWWWWWWWWW" at 28 px overflows the 220 px
-// panel, so render_pass adapts the reveal font 28 -> 20 -> 14. Width is
-// measured on the live label via public API: LVGL 9 keeps lv_text_get_width
-// in a private header with attribute-pointer arguments.
+// Widest-case check: 16 chars at 28 px cannot fit the 220 px panel, so
+// render_pass adapts the reveal font 28 -> 20 -> 14 -> 12 on the measured
+// label width (live measurement via public API: LVGL 9 keeps
+// lv_text_get_width in a private header).
 
 static void render_pass(void) {
     const uint32_t count = s_app.store.site_count;
@@ -399,8 +413,11 @@ static void render_pass(void) {
         return;
     }
     const pw_site_t *site = &s_app.store.sites[s_app.site_cursor];
+    const bool is_pin = site->mode == PW_MODE_PIN;
     if (site->name[0] == '\0') {
-        lv_label_set_text(s_pass_name, "--");
+        lv_label_set_text(s_pass_name, is_pin ? "-- PIN" : "--");
+    } else if (is_pin) {
+        lv_label_set_text_fmt(s_pass_name, "%s PIN", site->name);
     } else {
         lv_label_set_text(s_pass_name, site->name);
     }
@@ -412,16 +429,21 @@ static void render_pass(void) {
         buf[site->len] = '\0';
         lv_obj_set_style_text_color(s_pass_label, lv_color_hex(TEXT_MUTED),
                                     LV_PART_MAIN);
+    } else if (is_pin) {
+        pw_pin(s_app.store.seed, site->row, site->col, site->len, buf);
+        lv_obj_set_style_text_color(s_pass_label, lv_color_hex(TEXT_MAIN),
+                                    LV_PART_MAIN);
     } else {
         pw_password(s_app.store.seed, site->row, site->col, site->len, buf);
         lv_obj_set_style_text_color(s_pass_label, lv_color_hex(TEXT_MAIN),
                                     LV_PART_MAIN);
     }
     lv_label_set_text(s_pass_label, buf);
-    static const lv_font_t *fits[3] = {
+    static const lv_font_t *fits[4] = {
         &lv_font_montserrat_28,
         &lv_font_montserrat_20,
         &lv_font_montserrat_14,
+        &lv_font_montserrat_12,
     };
     for (uint32_t i = 0; i < 3u; i++) {
         lv_obj_set_style_text_font(s_pass_label, fits[i], LV_PART_MAIN);
@@ -445,8 +467,8 @@ static void build_wizard(void) {
     if (s_scr[PW_SCREEN_WIZARD]) return;
     lv_obj_t *scr = make_screen(BG_RAISE);
     s_scr[PW_SCREEN_WIZARD] = scr;
-    lv_obj_t *title = make_label(scr, 2, 240, TEXT_MAIN, &pw_font_22);
-    lv_label_set_text(title, STR_WIZ_TITLE);
+    s_wiz_title = make_label(scr, 2, 240, TEXT_MAIN, &pw_font_22);
+    lv_label_set_text(s_wiz_title, STR_WIZ_TITLE);
     s_wiz_chip = make_label(scr, 34, 240, TEXT_MUTED, &pw_font_22);
     s_wiz_value = make_label(scr, 84, 240, TEXT_MAIN, &lv_font_montserrat_28);
     s_wiz_unit = make_label(scr, 126, 240, TEXT_MUTED, &pw_font_22);
@@ -477,19 +499,38 @@ static void build_wizard(void) {
 
 static void wizard_reset(void) {
     s_app.wiz_step = 0;
+    s_app.wiz_mode = PW_MODE_STD;
     s_app.wiz_row = 0;
     s_app.wiz_col = 0;
     s_app.wiz_len = 8u;
+    s_app.wiz_edit_idx = PW_WIZ_EDIT_NONE;
     pw_name_reset(&s_app.wiz_input);
 }
 
+// v1.2: prefill the wizard from an existing site; DONE overwrites it in place.
+static void wizard_edit_start(uint32_t idx) {
+    const pw_site_t *site = &s_app.store.sites[idx];
+    s_app.wiz_step = 0;
+    s_app.wiz_mode = site->mode;
+    s_app.wiz_row = site->row;
+    s_app.wiz_col = site->col;
+    s_app.wiz_len = site->len;
+    s_app.wiz_edit_idx = (uint8_t)idx;
+    pw_name_reset(&s_app.wiz_input);
+    s_app.wiz_input.len = (uint8_t)strlen(site->name);
+    memcpy(s_app.wiz_input.name, site->name, sizeof(s_app.wiz_input.name));
+}
+
 static void render_wizard(void) {
-    static const char *steps[4] = {
-        STR_STEP_ROW, STR_STEP_COL, STR_STEP_LEN, STR_STEP_NAME,
+    static const char *steps[5] = {
+        STR_STEP_MODE, STR_STEP_ROW, STR_STEP_COL, STR_STEP_LEN, STR_STEP_NAME,
     };
-    lv_label_set_text_fmt(s_wiz_chip, "%u/4 %s", (unsigned)(s_app.wiz_step + 1u),
+    lv_label_set_text(s_wiz_title, s_app.wiz_edit_idx == PW_WIZ_EDIT_NONE
+                                      ? STR_WIZ_TITLE
+                                      : STR_WIZ_EDIT);
+    lv_label_set_text_fmt(s_wiz_chip, "%u/5 %s", (unsigned)(s_app.wiz_step + 1u),
                           steps[s_app.wiz_step]);
-    const bool name_step = s_app.wiz_step == 3u;
+    const bool name_step = s_app.wiz_step == 4u;
     if (name_step) {
         lv_obj_add_flag(s_wiz_value, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wiz_unit, LV_OBJ_FLAG_HIDDEN);
@@ -539,14 +580,32 @@ static void render_wizard(void) {
             lv_obj_add_flag(s_wiz_wheel[i], LV_OBJ_FLAG_HIDDEN);
         }
         lv_obj_clear_flag(s_wiz_value, LV_OBJ_FLAG_HIDDEN);
-        if (s_app.wiz_step == 2u) {
+        if (s_app.wiz_step == 0u) {
+            if (s_app.wiz_mode == PW_MODE_PIN) {
+                lv_obj_set_style_text_font(s_wiz_value,
+                                           &lv_font_montserrat_28,
+                                           LV_PART_MAIN);
+                lv_label_set_text(s_wiz_value, "PIN");
+            } else {
+                lv_obj_set_style_text_font(s_wiz_value, &pw_font_22,
+                                           LV_PART_MAIN);
+                lv_label_set_text(s_wiz_value, STR_MODE_PW);
+            }
+            lv_obj_add_flag(s_wiz_unit, LV_OBJ_FLAG_HIDDEN);
+        } else if (s_app.wiz_step == 3u) {
+            lv_obj_set_style_text_font(s_wiz_value, &lv_font_montserrat_28,
+                                       LV_PART_MAIN);
             lv_label_set_text_fmt(s_wiz_value, "%u", (unsigned)s_app.wiz_len);
             lv_obj_clear_flag(s_wiz_unit, LV_OBJ_FLAG_HIDDEN);
-        } else if (s_app.wiz_step == 1u) {
+        } else if (s_app.wiz_step == 2u) {
+            lv_obj_set_style_text_font(s_wiz_value, &lv_font_montserrat_28,
+                                       LV_PART_MAIN);
             lv_label_set_text_fmt(s_wiz_value, "%c",
                                   (char)('A' + s_app.wiz_col));
             lv_obj_add_flag(s_wiz_unit, LV_OBJ_FLAG_HIDDEN);
         } else {
+            lv_obj_set_style_text_font(s_wiz_value, &lv_font_montserrat_28,
+                                       LV_PART_MAIN);
             lv_label_set_text_fmt(s_wiz_value, "%u",
                                   (unsigned)(s_app.wiz_row + 1u));
             lv_obj_add_flag(s_wiz_unit, LV_OBJ_FLAG_HIDDEN);
@@ -580,10 +639,11 @@ static void build_settings(void) {
     lv_obj_set_style_bg_color(s_set_cursor, lv_color_hex(ACCENT),
                               LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_set_cursor, LV_OPA_COVER, LV_PART_MAIN);
-    static const char *items[4] = {
-        STR_SET_REGEN, STR_SET_SEED, STR_SET_CLEAR, STR_SET_HELP,
+    static const char *items[5] = {
+        STR_SET_REGEN, STR_SET_SEED, STR_SET_RESTORE, STR_SET_CLEAR,
+        STR_SET_HELP,
     };
-    for (uint32_t i = 0; i < 4u; i++) {
+    for (uint32_t i = 0; i < 5u; i++) {
         s_set_items[i] = make_label(scr, 0, 192, TEXT_MAIN, &pw_font_22);
         lv_obj_set_style_text_align(s_set_items[i], LV_TEXT_ALIGN_LEFT,
                                     LV_PART_MAIN);
@@ -595,7 +655,7 @@ static void build_settings(void) {
 }
 
 static void render_settings(void) {
-    for (uint32_t i = 0; i < 4u; i++) {
+    for (uint32_t i = 0; i < 5u; i++) {
         lv_obj_set_style_text_color(
             s_set_items[i],
             lv_color_hex(i == s_app.set_cursor ? INK : TEXT_MAIN),
@@ -616,9 +676,11 @@ static void build_confirm(void) {
 }
 
 static void render_confirm(void) {
-    lv_label_set_text(s_confirm_msg, s_app.confirm_what == 0u
-                                        ? STR_CONFIRM_REGEN
-                                        : STR_CONFIRM_CLEAR);
+    const char *msg = STR_CONFIRM_REGEN;
+    if (s_app.confirm_what == 1u) msg = STR_CONFIRM_CLEAR;
+    else if (s_app.confirm_what == 2u) msg = STR_CONFIRM_DELETE;
+    else if (s_app.confirm_what == 3u) msg = STR_CONFIRM_RESTORE;
+    lv_label_set_text(s_confirm_msg, msg);
 }
 
 static void build_seed(void) {
@@ -631,7 +693,8 @@ static void build_seed(void) {
                               &lv_font_montserrat_14);
     s_seed_line2 = make_label(scr, 132, 240, TEXT_MAIN,
                               &lv_font_montserrat_14);
-    lv_obj_t *hint = make_label(scr, 170, 240, TEXT_MUTED, &pw_font_22);
+    s_seed_crc = make_label(scr, 152, 240, TEXT_MUTED, &lv_font_montserrat_14);
+    lv_obj_t *hint = make_label(scr, 176, 240, TEXT_MUTED, &pw_font_22);
     lv_label_set_text(hint, STR_SEED_HINT);
     s_foot[PW_SCREEN_SEED] = make_footer(scr, STR_BACK_FOOT);
 }
@@ -644,6 +707,91 @@ static void render_seed(void) {
     line[16] = '\0';
     lv_label_set_text(s_seed_line1, line);
     lv_label_set_text(s_seed_line2, hex + 16);
+    lv_label_set_text_fmt(s_seed_crc, "CRC %02x",
+                          (unsigned)pw_seed_crc8(s_app.store.seed));
+}
+
+// ------------------------------------------------------------ SEEDIN (v1.2)
+
+static void build_seedin(void) {
+    if (s_scr[PW_SCREEN_SEEDIN]) return;
+    lv_obj_t *scr = make_screen(BG_RAISE);
+    s_scr[PW_SCREEN_SEEDIN] = scr;
+    lv_obj_t *title = make_label(scr, 2, 240, TEXT_MAIN, &pw_font_22);
+    lv_label_set_text(title, STR_SET_RESTORE);
+    s_seedin_line1 = make_label(scr, 46, 240, TEXT_MAIN,
+                                &lv_font_montserrat_14);
+    s_seedin_line2 = make_label(scr, 66, 240, TEXT_MAIN,
+                                &lv_font_montserrat_14);
+    s_seedin_status = make_label(scr, 96, 240, TEXT_MUTED,
+                                 &lv_font_montserrat_14);
+    for (uint32_t i = 0; i < 7u; i++) {
+        lv_obj_t *tile = lv_obj_create(scr);
+        lv_obj_set_pos(tile, (int32_t)(29 + i * 26), 150);
+        lv_obj_set_size(tile, 24, 30);
+        lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_radius(tile, 4, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(tile, 0, LV_PART_MAIN);
+        lv_obj_set_style_border_width(tile, 0, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(tile, lv_color_hex(TILE), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_t *gl = lv_label_create(tile);
+        lv_obj_set_style_text_font(gl, &lv_font_montserrat_20, LV_PART_MAIN);
+        lv_obj_set_style_text_color(gl, lv_color_hex(TEXT_MAIN), LV_PART_MAIN);
+        lv_obj_center(gl);
+        s_seedin_wheel[i] = tile;
+        s_seedin_wheel_lbl[i] = gl;
+    }
+    s_foot[PW_SCREEN_SEEDIN] = make_footer(scr, STR_WIZ_NAME_FOOT);
+}
+
+static void render_seedin(void) {
+    char shown[PW_HEX_INPUT_MAX + 2u];
+    memset(shown, 0, sizeof(shown));
+    memcpy(shown, s_app.seedin.text, s_app.seedin.len);
+    if (s_app.seedin.len < PW_HEX_INPUT_MAX) {
+        shown[s_app.seedin.len] = '_';  // typing cursor
+    }
+    char line[17];
+    snprintf(line, sizeof(line), "%.16s", shown);
+    lv_label_set_text(s_seedin_line1, line);
+    snprintf(line, sizeof(line), "%.16s", shown + 16);
+    lv_label_set_text(s_seedin_line2, line);
+    if (s_app.seedin.len < PW_HEX_INPUT_MAX) {
+        lv_label_set_text_fmt(s_seedin_status, "%u/32",
+                              (unsigned)s_app.seedin.len);
+    } else {
+        uint8_t seed[PW_SEED_BYTES];
+        if (pw_seed_from_hex(s_app.seedin.text, seed)) {
+            lv_label_set_text_fmt(s_seedin_status, "CRC %02x",
+                                  (unsigned)pw_seed_crc8(seed));
+        } else {
+            lv_label_set_text(s_seedin_status, "--");
+        }
+    }
+    for (uint32_t i = 0; i < 7u; i++) {
+        const uint32_t entry =
+            (s_app.seedin.cursor + PW_HEX_WHEEL_N + i - 3u) % PW_HEX_WHEEL_N;
+        const bool center = i == 3u;
+        const char c = pw_hex_wheel_char(entry);
+        if (c == '\0') {
+            lv_obj_set_style_text_font(s_seedin_wheel_lbl[i], &pw_font_22,
+                                       LV_PART_MAIN);
+            lv_label_set_text(s_seedin_wheel_lbl[i],
+                              entry == PW_HEX_IDX_DELETE ? STR_WHEEL_DELETE
+                                                         : STR_WHEEL_DONE);
+        } else {
+            lv_obj_set_style_text_font(s_seedin_wheel_lbl[i],
+                                       &lv_font_montserrat_20, LV_PART_MAIN);
+            lv_label_set_text_fmt(s_seedin_wheel_lbl[i], "%c", c);
+        }
+        lv_obj_set_style_text_color(
+            s_seedin_wheel_lbl[i],
+            lv_color_hex(center ? INK : TEXT_MUTED), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(s_seedin_wheel[i],
+                                  lv_color_hex(center ? ACCENT : TILE),
+                                  LV_PART_MAIN);
+    }
 }
 
 static void build_help(void) {
@@ -696,6 +844,11 @@ static void show_screen(pw_screen_t next) {
         render_seed();
         lv_screen_load(s_scr[PW_SCREEN_SEED]);
         break;
+    case PW_SCREEN_SEEDIN:
+        build_seedin();
+        render_seedin();
+        lv_screen_load(s_scr[PW_SCREEN_SEEDIN]);
+        break;
     case PW_SCREEN_HELP:
         build_help();
         lv_screen_load(s_scr[PW_SCREEN_HELP]);
@@ -712,7 +865,9 @@ static void show_screen(pw_screen_t next) {
 // ------------------------------------------------------------------ actions
 
 static void wizard_save(void) {
-    if (s_app.store.site_count >= PW_SITES_MAX) {
+    const bool editing = s_app.wiz_edit_idx != PW_WIZ_EDIT_NONE &&
+                         s_app.wiz_edit_idx < s_app.store.site_count;
+    if (!editing && s_app.store.site_count >= PW_SITES_MAX) {
         toast(STR_SITES_FULL);
         return;
     }
@@ -722,44 +877,68 @@ static void wizard_save(void) {
     while (end > 0u && s_app.wiz_input.name[end - 1u] == ' ') end--;
     memcpy(name, s_app.wiz_input.name, end);
     name[end] = '\0';
-    pw_site_t *site = &s_app.store.sites[s_app.store.site_count];
+    pw_site_t *site =
+        editing ? &s_app.store.sites[s_app.wiz_edit_idx]
+                : &s_app.store.sites[s_app.store.site_count];
     site->row = s_app.wiz_row;
     site->col = s_app.wiz_col;
     site->len = s_app.wiz_len;
+    site->mode = s_app.wiz_mode;
     memcpy(site->name, name, sizeof(site->name));
-    s_app.store.site_count++;
-    s_app.site_cursor = (uint8_t)(s_app.store.site_count - 1u);
+    if (editing) {
+        s_app.site_cursor = s_app.wiz_edit_idx;
+    } else {
+        s_app.store.site_count++;
+        s_app.site_cursor = (uint8_t)(s_app.store.site_count - 1u);
+    }
     sites_scroll_to_cursor();
     if (pw_store_save(&s_app.store) != ESP_OK) {
         ESP_LOGW(TAG, "保存站点失败,NVS 写入失败");
     }
-    ESP_LOGI(TAG, "site added row=%u col=%u len=%u count=%u",
-             (unsigned)(site->row + 1u), (unsigned)('A' + site->col),
-             (unsigned)site->len, (unsigned)s_app.store.site_count);
+    ESP_LOGI(TAG, "site %s idx=%u mode=%u row=%u col=%u len=%u count=%u",
+             editing ? "edited" : "added",
+             (unsigned)(editing ? s_app.wiz_edit_idx
+                               : s_app.store.site_count - 1u),
+             (unsigned)site->mode, (unsigned)(site->row + 1u),
+             (unsigned)('A' + site->col), (unsigned)site->len,
+             (unsigned)s_app.store.site_count);
     show_screen(PW_SCREEN_SITES);
     toast(STR_TOAST_SAVED);
 }
 
 static void wizard_step(int dir) {
     switch (s_app.wiz_step) {
-    case 0:
+    case 0:  // mode: any delta toggles between 密码 and PIN
+        if (dir != 0) {
+            s_app.wiz_mode =
+                (s_app.wiz_mode == PW_MODE_STD) ? PW_MODE_PIN : PW_MODE_STD;
+        }
+        if (s_app.wiz_mode == PW_MODE_PIN) {
+            if (s_app.wiz_len > PW_PIN_LEN_MAX) s_app.wiz_len = PW_PIN_LEN_MAX;
+        } else {
+            if (s_app.wiz_len < PW_LEN_MIN) s_app.wiz_len = PW_LEN_MIN;
+        }
+        break;
+    case 1:
         s_app.wiz_row = (uint8_t)((s_app.wiz_row + PW_ROWS_N +
                                    (dir > 0 ? 1u : PW_ROWS_N - 1u)) %
                                   PW_ROWS_N);
         break;
-    case 1:
+    case 2:
         s_app.wiz_col = (uint8_t)((s_app.wiz_col + PW_COLS_N +
                                    (dir > 0 ? 1u : PW_COLS_N - 1u)) %
                                   PW_COLS_N);
         break;
-    case 2:
-        s_app.wiz_len = (uint8_t)(PW_LEN_MIN +
-                                  ((s_app.wiz_len - PW_LEN_MIN +
-                                    PW_LEN_MAX - PW_LEN_MIN + 1u +
-                                    (dir > 0 ? 1u
-                                             : PW_LEN_MAX - PW_LEN_MIN)) %
-                                   (PW_LEN_MAX - PW_LEN_MIN + 1u)));
+    case 3: {
+        const uint32_t lo = PW_LEN_MIN;
+        const uint32_t hi = s_app.wiz_mode == PW_MODE_PIN ? PW_PIN_LEN_MAX
+                                                          : PW_LEN_MAX;
+        s_app.wiz_len = (uint8_t)(lo +
+                                  ((s_app.wiz_len - lo + hi - lo + 1u +
+                                    (dir > 0 ? 1u : hi - lo)) %
+                                   (hi - lo + 1u)));
         break;
+    }
     default: {
         const uint32_t n = PW_NAME_WHEEL_N;
         s_app.wiz_input.cursor =
@@ -771,7 +950,7 @@ static void wizard_step(int dir) {
 }
 
 static void wizard_ok(void) {
-    if (s_app.wiz_step < 3u) {
+    if (s_app.wiz_step < 4u) {
         s_app.wiz_step++;
         render_wizard();
         return;
@@ -798,7 +977,7 @@ static void confirm_execute(void) {
         show_screen(PW_SCREEN_SETTINGS);
         toast(STR_TOAST_REGEN);
         ESP_LOGI(TAG, "card regenerated");
-    } else {
+    } else if (s_app.confirm_what == 1u) {
         s_app.store.site_count = 0;
         s_app.site_cursor = 0;
         s_app.site_top = 0;
@@ -808,6 +987,42 @@ static void confirm_execute(void) {
         show_screen(PW_SCREEN_SETTINGS);
         toast(STR_TOAST_CLEAR);
         ESP_LOGI(TAG, "sites cleared");
+    } else if (s_app.confirm_what == 2u) {
+        const uint32_t idx = s_app.confirm_idx;
+        if (idx < s_app.store.site_count) {
+            memmove(&s_app.store.sites[idx], &s_app.store.sites[idx + 1u],
+                    (s_app.store.site_count - 1u - idx) * sizeof(pw_site_t));
+            s_app.store.site_count--;
+            if (s_app.site_cursor >= s_app.store.site_count &&
+                s_app.site_cursor > 0u) {
+                s_app.site_cursor =
+                    (uint8_t)(s_app.store.site_count > 0u
+                                  ? s_app.store.site_count - 1u
+                                  : 0u);
+            }
+            sites_scroll_to_cursor();
+            if (pw_store_save(&s_app.store) != ESP_OK) {
+                ESP_LOGW(TAG, "删除保存失败");
+            }
+            ESP_LOGI(TAG, "site deleted idx=%u count=%u", (unsigned)idx,
+                     (unsigned)s_app.store.site_count);
+        }
+        show_screen(PW_SCREEN_SITES);
+        toast(STR_TOAST_DELETED);
+    } else {  // 3: restore seed typed on SEEDIN
+        uint8_t seed[PW_SEED_BYTES];
+        if (pw_seed_from_hex(s_app.seedin.text, seed)) {
+            memcpy(s_app.store.seed, seed, PW_SEED_BYTES);
+            if (pw_store_save(&s_app.store) != ESP_OK) {
+                ESP_LOGW(TAG, "恢复种子保存失败");
+            }
+            ESP_LOGI(TAG, "seed restored");
+            show_screen(PW_SCREEN_SETTINGS);
+            toast(STR_TOAST_RESTORED);
+        } else {
+            show_screen(PW_SCREEN_SETTINGS);
+            toast(STR_SEED_INVALID);
+        }
     }
 }
 
@@ -833,9 +1048,16 @@ static void step_screen(int button) {
         wizard_step(dir);
         break;
     case PW_SCREEN_SETTINGS:
-        s_app.set_cursor = (uint8_t)((s_app.set_cursor + 4u + dir) % 4u);
+        s_app.set_cursor = (uint8_t)((s_app.set_cursor + 5u + dir) % 5u);
         render_settings();
         break;
+    case PW_SCREEN_SEEDIN: {
+        const uint32_t n = PW_HEX_WHEEL_N;
+        s_app.seedin.cursor =
+            (s_app.seedin.cursor + n + (dir > 0 ? 1u : n - 1u)) % n;
+        render_seedin();
+        break;
+    }
     default:
         foot_flash();
         break;
@@ -914,6 +1136,7 @@ static void handle_key(int button, int event) {
         case PW_SCREEN_SITES:
         case PW_SCREEN_WIZARD:
         case PW_SCREEN_SETTINGS:
+        case PW_SCREEN_SEEDIN:
             s_hold_btn = button;
             s_hold_ms = 0;
             step_screen(button);
@@ -934,9 +1157,27 @@ static void handle_key(int button, int event) {
     if (event == BSP_BTN_CLICK &&
         (button == BSP_BTN_UP || button == BSP_BTN_DOWN)) {
         if (s_app.screen == PW_SCREEN_CONFIRM) {
-            show_screen(PW_SCREEN_SETTINGS);
+            show_screen(s_app.confirm_back);
         } else {
             foot_flash();
+        }
+        return;
+    }
+    // v1.2: on the password screen, long-press UP deletes this site (through
+    // the double-confirm screen) and long-press DOWN reopens the wizard
+    // prefilled for editing - both hinted on screen above the footer.
+    if (event == BSP_BTN_LONG && s_app.screen == PW_SCREEN_PASS &&
+        (button == BSP_BTN_UP || button == BSP_BTN_DOWN) &&
+        s_app.site_cursor < s_app.store.site_count) {
+        s_app.reveal_ms = 0u;
+        if (button == BSP_BTN_UP) {
+            s_app.confirm_what = 2u;
+            s_app.confirm_idx = s_app.site_cursor;
+            s_app.confirm_back = PW_SCREEN_PASS;
+            show_screen(PW_SCREEN_CONFIRM);
+        } else {
+            wizard_edit_start(s_app.site_cursor);
+            show_screen(PW_SCREEN_WIZARD);
         }
         return;
     }
@@ -960,9 +1201,12 @@ static void handle_key(int button, int event) {
             show_screen(PW_SCREEN_CARD);
             break;
         case PW_SCREEN_CONFIRM:
-            show_screen(PW_SCREEN_SETTINGS);
+            show_screen(s_app.confirm_back);
             break;
         case PW_SCREEN_SEED:
+            show_screen(PW_SCREEN_SETTINGS);
+            break;
+        case PW_SCREEN_SEEDIN:
             show_screen(PW_SCREEN_SETTINGS);
             break;
         case PW_SCREEN_HELP:
@@ -1004,13 +1248,19 @@ static void handle_key(int button, int event) {
             switch (s_app.set_cursor) {
             case 0:
                 s_app.confirm_what = 0;
+                s_app.confirm_back = PW_SCREEN_SETTINGS;
                 show_screen(PW_SCREEN_CONFIRM);
                 break;
             case 1:
                 show_screen(PW_SCREEN_SEED);
                 break;
             case 2:
+                pw_hex_reset(&s_app.seedin);
+                show_screen(PW_SCREEN_SEEDIN);
+                break;
+            case 3:
                 s_app.confirm_what = 1;
+                s_app.confirm_back = PW_SCREEN_SETTINGS;
                 show_screen(PW_SCREEN_CONFIRM);
                 break;
             default:
@@ -1024,6 +1274,37 @@ static void handle_key(int button, int event) {
             break;
         case PW_SCREEN_SEED:
             show_screen(PW_SCREEN_SETTINGS);
+            break;
+        case PW_SCREEN_SEEDIN:
+            switch (pw_hex_ok(&s_app.seedin)) {
+            case PW_HEX_DONE: {
+                if (s_app.seedin.len < PW_HEX_INPUT_MAX) {
+                    foot_flash();  // incomplete seed: keep typing
+                    break;
+                }
+                uint8_t seed[PW_SEED_BYTES];
+                bool all_zero = true;
+                if (pw_seed_from_hex(s_app.seedin.text, seed)) {
+                    for (uint32_t i = 0; i < PW_SEED_BYTES; i++) {
+                        if (seed[i] != 0u) all_zero = false;
+                    }
+                }
+                if (all_zero) {
+                    toast(STR_SEED_INVALID);  // zero seed reads as "not set"
+                    break;
+                }
+                s_app.confirm_what = 3u;
+                s_app.confirm_back = PW_SCREEN_SETTINGS;
+                show_screen(PW_SCREEN_CONFIRM);
+                break;
+            }
+            case PW_HEX_FULL:
+                foot_flash();  // already 32 digits: delete or finish first
+                break;
+            default:
+                render_seedin();
+                break;
+            }
             break;
         case PW_SCREEN_HELP:
         default:
@@ -1109,6 +1390,7 @@ esp_err_t pwcard_app_start(void) {
     s_timer = lv_timer_create(tick, 250, NULL);
     bsp_lvgl_unlock();
     s_ready = true;
+    ESP_LOGI(TAG, "pwcard v1.2");
     ESP_LOGI(TAG, "密码卡就绪 sites=%u", (unsigned)s_app.store.site_count);
     return ESP_OK;
 }

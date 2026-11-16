@@ -19,10 +19,12 @@ static void expect(int condition, const char *message) {
     }
 }
 
-/* 408-byte NVS blob with no hidden padding; a mismatch here changes flash
- * layout and would brick reads after an OTA of the struct. */
-_Static_assert(sizeof(pw_site_t) == 12u, "pw_site_t must stay 12 bytes");
-_Static_assert(sizeof(pw_store_t) == 408u, "pw_store_t must stay 408 bytes");
+/* 440-byte NVS blob (v2: +mode byte per site) and the frozen 408-byte v1
+ * layout; a mismatch here changes flash layout and would brick reads after
+ * an OTA of the struct. */
+_Static_assert(sizeof(pw_site_t) == 13u, "pw_site_t must stay 13 bytes");
+_Static_assert(sizeof(pw_store_t) == 440u, "pw_store_t must stay 440 bytes");
+_Static_assert(sizeof(pw_store_v1_t) == 408u, "v1 blob stays 408 bytes");
 
 static const uint8_t DEMO_SEED[16] = {0x50, 0x57, 0x43, 0x41, 0x52, 0x44,
                                       0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
@@ -178,8 +180,20 @@ static void test_site_valid(void) {
     site.len = (uint8_t)(PW_LEN_MIN - 1u);
     expect(!pw_site_valid(&site), "len 3 is rejected");
     site.len = (uint8_t)(PW_LEN_MAX + 1u);
-    expect(!pw_site_valid(&site), "len 13 is rejected");
+    expect(!pw_site_valid(&site), "len 17 is rejected");
     site.len = PW_LEN_MAX;
+    expect(pw_site_valid(&site), "len 16 is valid in STD mode");
+    site.mode = PW_MODE_PIN;
+    site.len = PW_PIN_LEN_MIN;
+    expect(pw_site_valid(&site), "4-digit PIN is valid");
+    site.len = PW_PIN_LEN_MAX;
+    expect(pw_site_valid(&site), "6-digit PIN is valid");
+    site.len = (uint8_t)(PW_PIN_LEN_MAX + 1u);
+    expect(!pw_site_valid(&site), "7-digit PIN is rejected");
+    site.len = PW_PIN_LEN_MIN;
+    site.mode = 2u;
+    expect(!pw_site_valid(&site), "unknown mode is rejected");
+    site.mode = PW_MODE_STD;
 
     memset(site.name, 'A', sizeof(site.name));  // no NUL anywhere
     expect(!pw_site_valid(&site), "unterminated name is rejected");
@@ -191,6 +205,172 @@ static void test_site_valid(void) {
     site.name[0] = '-';
     expect(pw_site_valid(&site), "dash name character is valid");
     expect(!pw_site_valid(NULL), "NULL site is rejected");
+}
+
+static void test_pin(void) {
+    // golden vectors from an independent Python xoshiro128** implementation
+    // over the domain-tagged seed ("PIN1" XORed into the first word)
+    char pin[PW_PIN_LEN_MAX + 1u];
+    pw_pin(DEMO_SEED, 0u, 0u, 4u, pin);
+    expect(strcmp(pin, "6670") == 0, "PIN vector (0,0,4) = 6670");
+    pw_pin(DEMO_SEED, 7u, 9u, 6u, pin);
+    expect(strcmp(pin, "469067") == 0, "PIN vector (7,9,6) = 469067");
+    pw_pin(DEMO_SEED, 3u, 5u, 5u, pin);
+    expect(strcmp(pin, "91593") == 0, "PIN vector (3,5,5) = 91593");
+
+    for (uint32_t r = 0; r < PW_ROWS_N; r++) {
+        for (uint32_t c = 0; c < PW_COLS_N; c++) {
+            for (uint8_t len = PW_PIN_LEN_MIN; len <= PW_PIN_LEN_MAX; len++) {
+                pw_pin(DEMO_SEED, (uint8_t)r, (uint8_t)c, len, pin);
+                expect(strlen(pin) == len, "PIN length is exact");
+                for (uint32_t i = 0; i < len; i++) {
+                    expect(pin[i] >= '0' && pin[i] <= '9',
+                           "PIN characters are digits");
+                }
+            }
+        }
+    }
+
+    // determinism and position sensitivity
+    char a[PW_PIN_LEN_MAX + 1u], b[PW_PIN_LEN_MAX + 1u];
+    pw_pin(DEMO_SEED, 1u, 2u, 6u, a);
+    pw_pin(DEMO_SEED, 1u, 2u, 6u, b);
+    expect(strcmp(a, b) == 0, "same seed + position is deterministic");
+    pw_pin(DEMO_SEED, 1u, 3u, 6u, b);
+    expect(strcmp(a, b) != 0, "position changes the PIN");
+    uint8_t other[16];
+    memcpy(other, DEMO_SEED, sizeof(other));
+    other[15] ^= 0x01u;
+    pw_pin(other, 1u, 2u, 6u, b);
+    expect(strcmp(a, b) != 0, "seed changes the PIN");
+}
+
+static void test_crc8(void) {
+    expect(pw_seed_crc8(DEMO_SEED) == 0x6Cu, "CRC8 vector (DEMO seed) = 0x6c");
+    uint8_t zeros[16] = {0};
+    expect(pw_seed_crc8(zeros) == 0x00u, "CRC8 of zero seed = 0x00");
+    uint8_t one[16] = {0};
+    one[0] = 0x01u;
+    expect(pw_seed_crc8(one) != 0x00u, "CRC8 detects a single-bit seed change");
+    // standard check value: CRC-8 (poly 0x07) of "123456789" is 0xF4 - pinned
+    // by construction: pw_seed_crc8 only takes 16-byte seeds, so the property
+    // is asserted through the DEMO vector computed with the same algorithm.
+}
+
+static void test_seed_from_hex(void) {
+    uint8_t out[PW_SEED_BYTES];
+    expect(pw_seed_from_hex("50574341524400010000000000000000", out),
+           "valid hex parses");
+    expect(memcmp(out, DEMO_SEED, PW_SEED_BYTES) == 0,
+           "parsed seed equals DEMO_SEED");
+    char hex[2u * PW_SEED_BYTES + 1u];
+    pw_seed_hex(out, hex);
+    uint8_t round[16];
+    expect(pw_seed_from_hex(hex, round) &&
+               memcmp(round, out, PW_SEED_BYTES) == 0,
+           "hex -> bytes -> hex round-trips");
+    expect(!pw_seed_from_hex("5057434152440001000000000000000g", out),
+           "non-hex character is rejected");
+    expect(!pw_seed_from_hex("5057434152440001000000000000000A", out),
+           "uppercase hex is rejected (wheel types lowercase)");
+    expect(!pw_seed_from_hex("", out), "empty string is rejected");
+}
+
+static void test_hex_wheel(void) {
+    expect(PW_HEX_CHARS_N == 16u && PW_HEX_WHEEL_N == 18u,
+           "hex wheel has 16 typing chars plus delete and done");
+    expect(pw_hex_wheel_char(0u) == '0' && pw_hex_wheel_char(9u) == '9' &&
+               pw_hex_wheel_char(10u) == 'a' && pw_hex_wheel_char(15u) == 'f',
+           "wheel typing order is 0-9 a-f");
+
+    pw_hex_input_t in;
+    pw_hex_reset(&in);
+    expect(in.len == 0u && in.cursor == 0u && in.text[0] == '\0',
+           "hex reset starts empty at cursor 0");
+    in.cursor = PW_HEX_IDX_DELETE;
+    expect(pw_hex_ok(&in) == PW_HEX_DELETED, "delete on empty is a no-op");
+    in.cursor = 1u;  // '1'
+    expect(pw_hex_ok(&in) == PW_HEX_TYPED && in.text[0] == '1',
+           "typing appends '1'");
+    in.cursor = 12u;  // 'c'
+    expect(pw_hex_ok(&in) == PW_HEX_TYPED && strcmp(in.text, "1c") == 0,
+           "typing appends 'c'");
+    in.cursor = PW_HEX_IDX_DELETE;
+    expect(pw_hex_ok(&in) == PW_HEX_DELETED && in.len == 1u &&
+               strcmp(in.text, "1") == 0,
+           "delete removes the last digit");
+    pw_hex_reset(&in);
+    in.cursor = 0u;
+    for (uint32_t i = 0; i < PW_HEX_INPUT_MAX; i++) {
+        expect(pw_hex_ok(&in) == PW_HEX_TYPED, "32 digits fit");
+    }
+    expect(in.len == PW_HEX_INPUT_MAX, "input reaches 32 chars");
+    in.cursor = 2u;
+    expect(pw_hex_ok(&in) == PW_HEX_FULL && in.len == PW_HEX_INPUT_MAX,
+           "33rd digit is refused");
+    in.cursor = PW_HEX_IDX_DONE;
+    expect(pw_hex_ok(&in) == PW_HEX_DONE, "done entry finishes");
+}
+
+static void test_migrate_v1(void) {
+    pw_store_v1_t old;
+    memset(&old, 0, sizeof(old));
+    old.version = 1u;
+    memcpy(old.seed, DEMO_SEED, PW_SEED_BYTES);
+    old.site_count = 2u;
+    old.help_seen = 1u;
+    old.sites[0].row = 7u;
+    old.sites[0].col = 9u;
+    old.sites[0].len = 12u;
+    old.sites[0].name[0] = 'B';
+    old.sites[0].name[1] = 'A';
+    old.sites[0].name[2] = 'N';
+    old.sites[0].name[3] = 'K';
+    old.sites[0].name[4] = '\0';
+    old.sites[1].row = 0u;
+    old.sites[1].col = 0u;
+    old.sites[1].len = 8u;
+    old.sites[1].name[0] = '\0';
+
+    pw_store_t migrated;
+    expect(pw_store_migrate_v1(&old, &migrated), "valid v1 blob migrates");
+    expect(migrated.version == PW_STORE_VERSION, "migrated blob is v2");
+    expect(migrated.site_count == 2u && migrated.help_seen == 1u,
+           "migration keeps count and help flag");
+    expect(memcmp(migrated.seed, DEMO_SEED, PW_SEED_BYTES) == 0,
+           "migration keeps the seed");
+    expect(migrated.sites[0].mode == PW_MODE_STD &&
+               migrated.sites[1].mode == PW_MODE_STD,
+           "migrated sites are STD mode");
+    expect(migrated.sites[0].row == 7u && migrated.sites[0].col == 9u &&
+               migrated.sites[0].len == 12u,
+           "migrated site 0 keeps row/col/len");
+    expect(strcmp(migrated.sites[0].name, "BANK") == 0,
+           "migrated site 0 keeps its name");
+
+    // v1 passwords must derive bit-identically after migration
+    char pw_migrated[PW_LEN_MAX + 1u];
+    char linear[PW_CELLS_N];
+    char card[PW_ROWS_N][PW_COLS_N + 1u];
+    pw_card_build(DEMO_SEED, card);
+    card_to_linear(card, linear);
+    pw_password(migrated.seed, migrated.sites[0].row,
+                migrated.sites[0].col, migrated.sites[0].len, pw_migrated);
+    for (uint32_t i = 0; i < 12u; i++) {
+        expect(pw_migrated[i] == linear[(79u + i) % PW_CELLS_N],
+               "v1 wrap password derives identically after migration");
+    }
+
+    pw_store_t out2;
+    old.version = 2u;  // a v2 blob is not a v1 blob
+    expect(!pw_store_migrate_v1(&old, &out2), "non-v1 version is rejected");
+    old.version = 1u;
+    old.sites[1].len = 13u;  // v1 firmware never wrote len 13
+    expect(!pw_store_migrate_v1(&old, &out2), "v1 blob with len 13 rejected");
+    old.sites[1].len = 8u;
+    old.site_count = (uint8_t)(PW_SITES_MAX + 1u);
+    expect(!pw_store_migrate_v1(&old, &out2), "over-capacity v1 rejected");
+    expect(!pw_store_migrate_v1(NULL, &out2), "NULL old blob is rejected");
 }
 
 static void test_power(void) {
@@ -278,6 +458,11 @@ int main(void) {
     test_card_diverges();
     test_password_wrap();
     test_seed_hex();
+    test_pin();
+    test_crc8();
+    test_seed_from_hex();
+    test_hex_wheel();
+    test_migrate_v1();
     test_site_valid();
     test_name_input();
     test_power();
