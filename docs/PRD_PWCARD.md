@@ -5,7 +5,7 @@
 > Status: new application, first implementation 2026-11-09; pending on-device verification
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/pwcard (from upstream main)
-> PRD version: v1.0 (2026-11-09: initial - the device shows a fixed 8x10 character grid derived on first boot from a random 128-bit seed via xoshiro128\*\*; every site is just (row, column, length), and its password is that many cells read off the same 80-cell stream, wrapping past the end; passwords stay masked by default, OK reveals for 8 seconds, and any non-OK key re-masks immediately; site names are typed on a three-key wheel; the seed is viewable as hex so a replacement device rebuilds the same card; 55-character unambiguous alphabet ≈ 5.78 bit/char, so an 8-char site password carries ≈ 46.2 bit of in-card entropy; idle 12 s backlight dim, 60 s deep sleep with button wake)
+> PRD version: v1.2 (2026-11-16: per-site delete/edit from the password screen (long-press UP deletes via double-confirm, long-press DOWN reopens the wizard prefilled; both hinted on screen); wizard gains a mode step - STD card-run passwords 4-16 chars or a 4-6 digit PIN drawn from a domain-separated stream that never appears on the printable card; seed view gains a CRC-8 checksum and settings gains on-device seed entry (32-hex typing wheel) so a replacement device rebuilds the same card without a host tool; store layout v2 (440 bytes, +mode byte per site) with automatic load-time migration from the 408-byte v1.0 blob; v1.0 (2026-11-09): initial - the device shows a fixed 8x10 character grid derived on first boot from a random 128-bit seed via xoshiro128\*\*; every site is just (row, column, length), and its password is that many cells read off the same 80-cell stream, wrapping past the end; passwords stay masked by default, OK reveals for 8 seconds, and any non-OK key re-masks immediately; site names are typed on a three-key wheel; the seed is viewable as hex so a replacement device rebuilds the same card; 55-character unambiguous alphabet ≈ 5.78 bit/char, so an 8-char site password carries ≈ 46.2 bit of in-card entropy; idle 12 s backlight dim, 60 s deep sleep with button wake)
 > Mode: the derivation, wrap, seed-hex, record-validation and idle-power logic is pure C and host-testable; the C generator stream is cross-checked against the independent tools/pwcard/gen_assets.mjs implementation in tests/test_pw_core.c
 
 ## Use
@@ -14,31 +14,31 @@ The device opens on the card screen: an 8-row x 10-column grid over column heade
 
 - Card screen: UP/DOWN move the cursor row (hold to repeat). OK opens the site list, long-press OK opens settings.
 - Site list: UP/DOWN pick a row, OK opens the password screen, long-press OK returns to the card. The list always ends with a fixed add-site row (it disappears once the 32-site cap is reached). Rows show the site name only - the row/column/length summary lives on the password screen, where it is actually needed. The footer always states the current gestures.
-- Password screen: starts masked. OK reveals the password for 8 seconds with a shrinking countdown bar, then it masks itself; OK again (or any UP/DOWN press) masks it immediately. Long-press OK returns.
-- Add wizard: four steps - row 1-8, column A-J, length 4-12, then a name typing wheel: UP/DOWN scrolls a 7-entry window over A-Z 0-9 dash dot space plus visible delete and done entries (labeled in Chinese on screen); OK types the highlighted entry (or deletes / finishes), long-press OK cancels. The typed name with its cursor underscore shows above the wheel.
-- Settings: regenerate card (double-confirm: old passwords all change), view seed (32 hex characters), clear sites (double-confirm), help. The help screen also shows once on first boot.
+- Password screen: starts masked. OK reveals the password for 8 seconds with a shrinking countdown bar, then it masks itself; OK again (or any UP/DOWN press) masks it immediately. Long-press OK returns. Long-press UP deletes this site (through the double-confirm screen); long-press DOWN reopens the wizard prefilled for editing. Both gestures are stated in two muted hint lines above the footer. PIN sites show a " PIN" suffix on the name line; the summary line stays row/column/length.
+- Add/edit wizard: five steps - mode (STD password or PIN), row 1-8, column A-J, length (4-16 for STD, 4-6 for PIN), then a name typing wheel: UP/DOWN scrolls a 7-entry window over A-Z 0-9 dash dot space plus visible delete and done entries (labeled in Chinese on screen); OK types the highlighted entry (or deletes / finishes), long-press OK cancels. The typed name with its cursor underscore shows above the wheel. In edit mode the on-screen title switches from "add site" to "edit site" (Chinese chrome) and finishing overwrites the site in place.
+- Settings: regenerate card (double-confirm: old passwords all change), view seed (32 hex characters plus a CRC-8 checksum line), restore seed (type 32 hex characters on a 0-9 a-f wheel; the live "n/32" counter becomes the candidate's CRC when full; all-zero seeds are refused; confirming swaps the seed with a warning that every password changes - typed sites are kept), clear sites (double-confirm), help. The help screen also shows once on first boot.
 
 ## Security model
 
 - The seed is 128-bit, generated by `esp_fill_random` on first boot, stored in one NVS blob, and never leaves the device. No network, no Bluetooth.
-- A site stores only row/column/length plus an optional name (12 bytes); the password is always re-derived, never stored.
-- The alphabet drops visually confusable characters (0/O/o, 1/l/I/i): 55 characters, 5.78 bit each. An 8-character password carries about 46 bit of in-card entropy; this is a shoulder-surfing and casual-flip protection, not a password manager and not coercion-resistant - the threat model is stated in the help text and this PRD.
-- Same seed = same card on any unit; migrating means copying the 32 hex characters from the seed view.
+- A site stores only row/column/length/mode plus an optional name (13 bytes); the password is always re-derived, never stored. STD passwords are runs of card cells (v1.0 semantics; a migrated v1.0 site derives bit-identically). PINs are 4-6 digits from a stream keyed by the same seed XOR a "PIN1" domain tag and the site position: same seed rebuilds them on any unit, but they never appear on the card, so a stolen or photographed wallet card leaks no bank PINs.
+- The alphabet drops visually confusable characters (0/O/o, 1/l/I/i): 55 characters, 5.78 bit each. An 8-character password carries about 46 bit of in-card entropy; the v1.2 16-character maximum carries about 92 bit. This is a shoulder-surfing and casual-flip protection, not a password manager and not coercion-resistant - the threat model is stated in the help text and this PRD.
+- Same seed = same card on any unit; migrating means copying the 32 hex characters plus the 2-character CRC-8 from the seed view of the old device and typing them into "restore seed" on the new one. The checksum turns a silent single-character typo (which would otherwise produce a different valid card and wrong passwords everywhere) into a visible mismatch.
 
 ## Fonts and layout
 
-- Latin/grid/password text uses built-in Montserrat 14/20/28 (full ASCII coverage). The password reveal font adapts 28 -> 20 -> 14 px to the measured text width so a 12-character wide-glyph password cannot overflow the 220 px panel.
+- Latin/grid/password text uses built-in Montserrat 12/14/20/28 (full ASCII coverage; 12 enabled in v1.2 for the 16-character reveal). The password reveal font adapts 28 -> 20 -> 14 -> 12 px to the measured text width so a 16-character wide-glyph password cannot overflow the 220 px panel.
 - Chinese UI chrome uses a 4 bpp 22 px LXGW WenKai subset (~122 KB source) generated and glyph-audited by `tools/pwcard/gen_assets.mjs`; a missing glyph fails the generator.
 - Theme: dark cyan utility palette; all contrast pairs measured >= 4.5:1 for text (see design notes in `pwcard-staging/design.md` history and the audit table in the zh_CN PRD).
 
 ## Persistence
 
-One versioned 408-byte NVS blob (`pwcard_v1/state`): version, 16-byte seed, site count, first-boot flag, and 32 site records with explicit tail padding (static-asserted in host tests). Version or record mismatch falls back to fresh defaults.
+One versioned NVS blob (`pwcard_v1/state`): version, 16-byte seed, site count, first-boot flag, and 32 site records (v1.2 layout: 440 bytes with a mode byte per site; v1.0 layout: 408 bytes). A v1.0 blob is converted in one pure, host-tested step on load and self-healed back to flash as v2; version or record mismatch falls back to fresh defaults.
 
 ## Idle policy
 
 12 s to backlight dim (55% -> 8%), 60 s to deep sleep with GPIO button wake and the repo key-guard anti-accidental-press contract; any key resets the idle timer. The reveal countdown is independent and always re-masks at zero.
 
-## v1.0 does not include
+## v1.2 does not include
 
-Seed sync/Bluetooth, lock-screen PIN, QR-code seed export, multiple cards (v1.1 candidates pending device feedback).
+Seed sync/Bluetooth, lock-screen PIN, QR-code seed export, multiple cards (future candidates pending device feedback).
