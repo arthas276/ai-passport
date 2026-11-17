@@ -5,9 +5,12 @@
 > Status: In implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/cheer (from upstream main)
-> PRD version: v1.0 (2026-10-22: initial release - praise-card dispenser with
+> PRD version: v1.3 (2026-11-17: scene picker, growth-scale chimes,
+> library expanded to 164 cards, favorite cards)
+> History: v1.0 (2026-10-22: initial release - praise-card dispenser with
 > bag draw, warm chime, brightness-growth spirit, milestone celebrations,
-> history browse)
+> history browse); v1.2 (2026-11-10: 124-card library, balanced line breaks,
+> voltage readout, idle deep sleep, system-heap allocator)
 > Mode: user-authorized build; chime synth ported from feature/ear-buddy
 > (same repository, device-proven 2026-10-20)
 
@@ -16,10 +19,17 @@
 - UI name: CHEER — a pocket praise spirit you wear
 - Fully offline; no network, no account, no microphone use in v1
 - Press OK: the spirit hands you one warm praise card (Simplified Chinese)
-  with a soft chime; every card you take feeds its glow
+  with a soft chime; every card you take feeds its glow; the chime
+  transposes up as the spirit grows (v1.3)
+- v1.3 scene picker: hold OK to pick a scene (DAILY / WORK / STUDY /
+  BRAVE / NIGHT OWL / OUT & ABOUT / ALL); draws then come from that
+  scene's own bag, and the active scene tags the title row
+- v1.3 favorites: hold OK while browsing history to favorite a card; the
+  FAVS row browses saved cards, and every 10 favorites plays a fanfare
 - Anti-repeat "praise bag": cards are drawn without replacement until the
   bag empties, then reshuffled - no card repeats until you have seen them
-  all, and never the same card twice in a row across a reshuffle
+  all, and never the same card twice in a row across a reshuffle (the
+  same rules hold inside a single scene's bag)
 - The spirit grows brighter with collected cards: 6 stages from a faint
   ember to a radiant glow; a stage-up plays a small fanfare celebration
 
@@ -61,19 +71,27 @@ Single screen, redesigned UI (not the demo shell):
 
 main/
   cheer.h           - shared constants ([PURE] header)
-  cheer_cards.c/.h  - [PURE] praise-card library (84 cards, 4 groups) and
-                      the shuffled-bag draw engine (Fisher-Yates over
-                      xorshift32, no-repeat across reshuffle) + stage math;
-                      zero IDF/LVGL deps
+  cheer_cards.c/.h  - [PURE] praise-card library (164 cards, 6 groups:
+                      4 x 31 + NIGHT/OUT x 20) and the shuffled-bag draw
+                      engine (Fisher-Yates over xorshift32, no-repeat
+                      across reshuffle; scene bags draw from a contiguous
+                      group window) + stage math; zero IDF/LVGL deps
+  cheer_fav.c/.h    - [PURE] favorite-card list (cap 32, NVS blob
+                      roundtrip, every-10 milestone math). v1.3
   cheer_tone.c/.h   - [PURE] Q15 wavetable synth ported from ear_tone.c
                       (LUT + 3 partials + attack/decay/release envelope)
+                      plus the growth-scale chime note tables. v1.3
   cheer_audio.c/.h  - worker task: serializes bsp_audio calls; plays the
-                      3-note draw chime and 5-note stage-up fanfare;
+                      draw chime and stage-up fanfare transposed by the
+                      spirit's stage (octave sparkle from stage 3);
                       volume fixed at 80
-  cheer_store.c/.h  - NVS persistence: single u32 lifetime count ("cc")
-  cheer_ui.c/.h     - single LVGL screen: card view, history browse,
-                      procedural wisp spirit with 6 palettes, idle
-                      backlight manager
+  cheer_store.c/.h  - NVS persistence: lifetime count ("cc"), scene ("sc"),
+                      favorite blob ("fv"), favorite-milestone high-water
+                      ("fm"); pre-v1.3 devices migrate by defaults
+  cheer_ui.c/.h     - single LVGL screen: card view with FAV chip mark,
+                      history browse, modal scene picker overlay, dynamic
+                      mode hints, procedural wisp spirit with 6 palettes,
+                      idle backlight manager
   cheer_font.c/.h   - generated CJK subset font (24 px, 4 bpp) covering
                       exactly the card library's characters
   main.c            - BSP init -> input dispatch -> draw -> UI/audio
@@ -102,7 +120,9 @@ shuffle per boot); only the lifetime count persists in NVS.
 
 | Decision | Value | Rationale |
 | --- | --- | --- |
-| Card count 84, 4 groups x 21 | variety without bloat | full bag cycle = 84 draws no-repeat |
+| Card count 164, 4 groups x 31 + 2 x 20 | variety without bloat | full bag cycle = 164 draws no-repeat |
+| Scene picker via OK hold | zero new buttons | picker row == scene id, stored in NVS |
+| Favorite cap 32, milestone every 10 | NVS blob size | 64 B rewrite per toggle, cheap |
 | 6 stages at 0/10/30/80/160/320 | mirrors EAR BUDDY pacing | proven growth rhythm |
 | History cap 20 | RAM bounds | LVGL label reuse |
 | Chinese cards, English chrome | audience is Chinese-first | title/hints stay Montserrat |
