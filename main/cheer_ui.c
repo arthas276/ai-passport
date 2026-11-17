@@ -6,6 +6,8 @@
 // derivative app designs its own UI; palette stays in the house paper/ink/
 // amber family). Entry points assume the caller holds the LVGL lock; the
 // pulse and idle timers run inside the LVGL task.
+// v1.3 adds: scene tag beside the title, a modal scene picker overlay,
+// dynamic mode hints, and a FAV mark on favorited cards.
 #include "cheer_ui.h"
 #include "cheer_cards.h"
 #include "cheer_font.h"
@@ -25,7 +27,10 @@
 // Night-lamp theme: deep warm-brown night background, cream card glows
 // like a paper lantern, chrome text in cream. Contrast on night bg:
 // cream 11.7:1, muted 7.3:1 (WCAG AA); card text on paper 10.9:1.
+// Picker panel lifts the night bg one step lighter so the overlay reads
+// as a layer; cream on it still exceeds 7:1.
 #define BG_NIGHT    0x241A12
+#define BG_PANEL    0x2E2117
 #define CARD_PAPER  0xFFF3D6
 #define CARD_BORDER 0xB08A5A
 #define CARD_TEXT   0x3D2E1E
@@ -38,12 +43,24 @@ static const uint32_t STAGE_COLORS[CHEER_STAGE_COUNT] = {
 };
 
 static const char *GROUP_CHIPS[CHEER_GRP_COUNT] = {
-    "DAILY", "WORK", "STUDY", "BRAVE",
+    "DAILY", "WORK", "STUDY", "BRAVE", "NIGHT", "OUT",
 };
 
 // Group chip colors, all >= 5:1 on CARD_PAPER (WCAG AA small text).
 static const uint32_t GROUP_COLORS[CHEER_GRP_COUNT] = {
-    0xA05A10, 0x2F6B4F, 0x4A5FA5, 0xB03A3A,
+    0xA05A10, 0x2F6B4F, 0x4A5FA5, 0xB03A3A, 0x53417E, 0x1F6E68,
+};
+
+// Scene picker rows: 0 ALL, 1..CHEER_GRP_COUNT scenes, then favorites.
+#define PICKER_ROW_ALL    0
+#define PICKER_ROW_FAVS   (CHEER_GRP_COUNT + 1)
+#define PICKER_ROW_COUNT  (CHEER_GRP_COUNT + 2)
+#define PICKER_ROW_H      24
+#define PICKER_PANEL_W    160
+#define PICKER_PANEL_H    244
+
+static const char *PICKER_ROWS[PICKER_ROW_COUNT] = {
+    "ALL", "DAILY", "WORK", "STUDY", "BRAVE", "NIGHT", "OUT", "FAVS",
 };
 
 static lv_obj_t *s_batt;
@@ -55,6 +72,14 @@ static lv_obj_t *s_aux;
 static lv_obj_t *s_glow;
 static lv_obj_t *s_light;
 static lv_obj_t *s_lantern;
+static lv_obj_t *s_scene;
+static lv_obj_t *s_hint1;
+static lv_obj_t *s_hint2;
+static lv_obj_t *s_picker;
+static lv_obj_t *s_pick_hl;
+static lv_obj_t *s_pick_labels[PICKER_ROW_COUNT];
+static bool s_pick_open;
+static int s_pick_sel;
 
 static uint32_t s_idle_ms;
 static bool s_dimmed;
@@ -132,6 +157,15 @@ static lv_obj_t *part(lv_obj_t *parent, int x, int y, int w, int h,
     return o;
 }
 
+static lv_obj_t *text_label(lv_obj_t *parent, const char *txt,
+                            const lv_font_t *font, uint32_t color) {
+    lv_obj_t *l = lv_label_create(parent);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    return l;
+}
+
 static void lantern_build(lv_obj_t *scr) {
     // Paper lantern ~26x44 standing at (34, 242); glow disc behind it.
     s_glow = part(scr, 20, 232, 56, 56, STAGE_COLORS[0]);
@@ -164,6 +198,51 @@ static void lantern_apply(int stage) {
     lv_obj_set_style_bg_color(s_light, lv_color_hex(c), 0);
 }
 
+static void picker_apply(void) {
+    lv_obj_set_pos(s_pick_hl, 6, 24 + s_pick_sel * PICKER_ROW_H);
+    for (int i = 0; i < PICKER_ROW_COUNT; i++) {
+        lv_obj_set_style_text_color(
+            s_pick_labels[i],
+            lv_color_hex(i == s_pick_sel ? BG_NIGHT : CREAM), 0);
+    }
+}
+
+static void picker_build(lv_obj_t *scr) {
+    s_picker = lv_obj_create(scr);
+    lv_obj_remove_flag(s_picker, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(s_picker, (240 - PICKER_PANEL_W) / 2, 44);
+    lv_obj_set_size(s_picker, PICKER_PANEL_W, PICKER_PANEL_H);
+    lv_obj_set_style_radius(s_picker, 10, 0);
+    lv_obj_set_style_bg_color(s_picker, lv_color_hex(BG_PANEL), 0);
+    lv_obj_set_style_border_color(s_picker, lv_color_hex(CARD_BORDER), 0);
+    lv_obj_set_style_border_width(s_picker, 2, 0);
+    lv_obj_set_style_pad_all(s_picker, 0, 0);
+
+    lv_obj_t *title = text_label(s_picker, "SCENE", &lv_font_montserrat_14,
+                                 CARD_MUTED);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 7);
+
+    s_pick_hl = part(s_picker, 6, 24, PICKER_PANEL_W - 12, PICKER_ROW_H - 2,
+                     CREAM);
+    lv_obj_set_style_radius(s_pick_hl, 6, 0);
+
+    for (int i = 0; i < PICKER_ROW_COUNT; i++) {
+        s_pick_labels[i] = text_label(s_picker, PICKER_ROWS[i],
+                                      &lv_font_montserrat_14, CREAM);
+        lv_obj_align(s_pick_labels[i], LV_ALIGN_TOP_MID, 0,
+                     24 + i * PICKER_ROW_H + 4);
+    }
+
+    lv_obj_t *hint = text_label(s_picker, "OK PICK OKL BACK",
+                                &lv_font_montserrat_14, CARD_MUTED);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+
+    lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    s_pick_open = false;
+    s_pick_sel = PICKER_ROW_ALL;
+    picker_apply();
+}
+
 void cheer_ui_build(void) {
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
@@ -171,16 +250,20 @@ void cheer_ui_build(void) {
     lv_obj_set_style_border_width(scr, 0, 0);
     lv_obj_set_style_pad_all(scr, 0, 0);
 
-    lv_obj_t *title = ui_pixel_label(scr, "CHEER", &lv_font_montserrat_20,
-                                     CREAM);
+    lv_obj_t *title = text_label(scr, "CHEER", &lv_font_montserrat_20,
+                                 CREAM);
     lv_obj_set_pos(title, 14, 8);
+    // Scene tag: hidden for ALL. Worst case "SCENE: STUDY" stays left of
+    // the battery corner (pixel budget pinned by test_cheer_ui_budget.c).
+    s_scene = text_label(scr, "", &lv_font_montserrat_14, CARD_MUTED);
+    lv_obj_set_pos(s_scene, 84, 14);
     // Right-aligned corner: worst-case "4.44V" measures 41.25 px in
     // Montserrat 14, so a fixed x of 204 would push it past the 240 px edge
     // (204+41>240). Anchoring both labels to the right edge keeps every
     // string inside with a constant 12 px pad.
-    s_batt = ui_pixel_label(scr, "80%", &lv_font_montserrat_14, CARD_MUTED);
+    s_batt = text_label(scr, "80%", &lv_font_montserrat_14, CARD_MUTED);
     lv_obj_align(s_batt, LV_ALIGN_TOP_RIGHT, -12, 12);
-    s_volt = ui_pixel_label(scr, "--.-V", &lv_font_montserrat_14, CARD_MUTED);
+    s_volt = text_label(scr, "--.-V", &lv_font_montserrat_14, CARD_MUTED);
     lv_obj_align(s_volt, LV_ALIGN_TOP_RIGHT, -12, 30);
 
     // The card is the hero: x14 y50 w212 h172 (four 24 px CJK lines fit).
@@ -194,8 +277,7 @@ void cheer_ui_build(void) {
     lv_obj_set_style_border_width(card, 4, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
 
-    s_chip = ui_pixel_label(card, "DAILY", &lv_font_montserrat_14,
-                            CARD_MUTED);
+    s_chip = text_label(card, "DAILY", &lv_font_montserrat_14, CARD_MUTED);
     lv_obj_set_pos(s_chip, 10, 8);
     s_text = lv_label_create(card);
     lv_label_set_text(s_text, "...");
@@ -208,22 +290,22 @@ void cheer_ui_build(void) {
     lv_obj_center(s_text);
     lv_obj_set_y(s_text, 96);   // recenters on every set_text (see below)
 
-    s_hist = ui_pixel_label(scr, "", &lv_font_montserrat_14, CARD_MUTED);
+    s_hist = text_label(scr, "", &lv_font_montserrat_14, CARD_MUTED);
     lv_obj_align(s_hist, LV_ALIGN_TOP_MID, 0, 28);
     // Bottom column: three lines vertically centered on the lantern body
     // (lantern center y=264; line centers 244/266/288).
-    s_aux = ui_pixel_label(scr, "PRAISE 0", &lv_font_montserrat_14,
-                           CREAM);
+    s_aux = text_label(scr, "PRAISE 0", &lv_font_montserrat_14, CREAM);
     lv_obj_set_pos(s_aux, 96, 236);
-    lv_obj_t *hint1 = ui_pixel_label(scr, "OK PRAISE",
-                                     &lv_font_montserrat_14, CARD_MUTED);
-    lv_obj_set_pos(hint1, 96, 258);
-    lv_obj_t *hint2 = ui_pixel_label(scr, "UP/DN HISTORY",
-                                     &lv_font_montserrat_14, CARD_MUTED);
-    lv_obj_set_pos(hint2, 96, 280);
+    s_hint1 = text_label(scr, "OK PRAISE", &lv_font_montserrat_14,
+                         CARD_MUTED);
+    lv_obj_set_pos(s_hint1, 96, 258);
+    s_hint2 = text_label(scr, "OKL SCENE", &lv_font_montserrat_14,
+                         CARD_MUTED);
+    lv_obj_set_pos(s_hint2, 96, 280);
 
     lantern_build(scr);
     lantern_apply(0);
+    picker_build(scr);
     (void)lv_timer_create(pulse_cb, 350, NULL);
     // 有缓存（深睡唤醒）先显睡前值，等首个 30 秒 tick 再取新读数；无缓存
     // （冷启动/首次上电）立即读一次。
@@ -245,19 +327,36 @@ void cheer_ui_build(void) {
 
     // Boot greeting: one free praise (a real library card, so every glyph is
     // guaranteed to be in the generated font subset).
-    cheer_ui_show_card(3, 0, 0);
+    cheer_ui_show_card(3, false);
 }
 
-void cheer_ui_show_card(int idx, int hist_pos, int hist_len) {
+void cheer_ui_show_card(int idx, bool fav) {
     const cheer_card_t *c = &CHEER_CARDS[idx];
-    lv_label_set_text(s_chip, GROUP_CHIPS[c->grp]);
+    if (fav) {
+        lv_label_set_text_fmt(s_chip, "%s FAV", GROUP_CHIPS[c->grp]);
+    } else {
+        lv_label_set_text(s_chip, GROUP_CHIPS[c->grp]);
+    }
     lv_obj_set_style_text_color(s_chip, lv_color_hex(GROUP_COLORS[c->grp]), 0);
     lv_label_set_text(s_text, c->text);
     lv_obj_center(s_text);   // recenter vertically for 1-3 line texts
-    if (hist_pos > 0 && hist_len > 0) {
-        lv_label_set_text_fmt(s_hist, "-%d/%d -", hist_pos, hist_len);
+}
+
+void cheer_ui_set_hist(const char *txt) {
+    lv_label_set_text(s_hist, txt ? txt : "");
+}
+
+void cheer_ui_set_hint(const char *top, const char *bottom) {
+    if (top) lv_label_set_text(s_hint1, top);
+    if (bottom) lv_label_set_text(s_hint2, bottom);
+}
+
+void cheer_ui_set_scene(int scene) {
+    if (scene > 0 && scene <= CHEER_GRP_COUNT) {
+        lv_label_set_text_fmt(s_scene, "SCENE: %s",
+                              GROUP_CHIPS[scene - 1]);
     } else {
-        lv_label_set_text(s_hist, "");
+        lv_label_set_text(s_scene, "");
     }
 }
 
@@ -276,4 +375,37 @@ void cheer_ui_set_progress(uint32_t count) {
 
 void cheer_ui_set_battery(int soc) {
     battery_apply(soc, bsp_battery_mv());
+}
+
+void cheer_ui_picker_open(int selected) {
+    if (s_pick_open) return;
+    if (selected < 0 || selected >= PICKER_ROW_COUNT) selected = PICKER_ROW_ALL;
+    s_pick_sel = selected;
+    picker_apply();
+    lv_obj_remove_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_picker);
+    s_pick_open = true;
+}
+
+void cheer_ui_picker_close(void) {
+    if (!s_pick_open) return;
+    lv_obj_add_flag(s_picker, LV_OBJ_FLAG_HIDDEN);
+    s_pick_open = false;
+}
+
+void cheer_ui_picker_move(int delta) {
+    if (!s_pick_open) return;
+    int v = s_pick_sel + delta;
+    if (v < 0) v = 0;
+    if (v > PICKER_ROW_COUNT - 1) v = PICKER_ROW_COUNT - 1;
+    s_pick_sel = v;
+    picker_apply();
+}
+
+int cheer_ui_picker_pick(void) {
+    return s_pick_open ? s_pick_sel : -1;
+}
+
+bool cheer_ui_picker_is_open(void) {
+    return s_pick_open;
 }

@@ -94,6 +94,14 @@ run_static_checks() {
         tests/test_cheer_tone.c main/cheer_tone.c -lm \
         -o "${test_dir}/test_cheer_tone"
     "${test_dir}/test_cheer_tone"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_cheer_fav.c main/cheer_fav.c \
+        -o "${test_dir}/test_cheer_fav"
+    "${test_dir}/test_cheer_fav"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_cheer_ui_budget.c \
+        -o "${test_dir}/test_cheer_ui_budget"
+    "${test_dir}/test_cheer_ui_budget"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Icomponents/bsp/src \
         tests/test_bsp_display_rounding.c components/bsp/src/bsp_display_rounding.c \
         -o "${test_dir}/test_bsp_display_rounding"

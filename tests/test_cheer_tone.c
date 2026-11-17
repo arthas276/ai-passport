@@ -36,6 +36,26 @@ int main(void) {
     cheer_tone_mix(out, b, N);
     for (int i = 0; i < N; i++) assert(out[i] == 32767);
 
-    printf("cheer tone: lut/env/tuning/mix ok (peak %d)\n", peak);
+    // v1.3 growth-scale chimes: root rises with stage, notes stay in the
+    // small-speaker band, chime gains an octave sparkle at stage >= 3,
+    // fanfare stays 5 notes and strictly ascending.
+    uint8_t prev_root = 0;
+    for (int st = 0; st < CHEER_STAGE_COUNT; st++) {
+        uint8_t r = cheer_chime_root(st);
+        if (st > 0 && r <= prev_root) return 1;   // fail (main asserts 0)
+        if (r < 60 || r > 84) return 1;
+        prev_root = r;
+        uint8_t n[8];
+        int cnt = cheer_chime_notes(st, false, n, 8);
+        if (cnt != (st >= 3 ? 4 : 3)) return 1;
+        for (int i = 0; i < cnt; i++) {
+            if (n[i] < 60 || n[i] > 96) return 1;
+            if (i > 0 && n[i] <= n[i - 1]) return 1;
+        }
+        int fc = cheer_chime_notes(st, true, n, 8);
+        if (fc != 5 || n[4] > 96) return 1;
+    }
+
+    printf("cheer tone: lut/env/tuning/mix/chimes ok (peak %d)\n", peak);
     return 0;
 }

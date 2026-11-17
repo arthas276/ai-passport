@@ -77,6 +77,45 @@ static int library_ok(void) {
     return 1;
 }
 
+static int groups_and_extents_ok(void) {
+    if (CHEER_GRP_COUNT != 6) return 0;
+    uint8_t per_grp[CHEER_GRP_COUNT] = { 0 };
+    for (size_t i = 0; i < CHEER_CARD_COUNT; i++) per_grp[CHEER_CARDS[i].grp]++;
+    int prev_end = -1, total = 0;
+    for (int g = 0; g < CHEER_GRP_COUNT; g++) {
+        int start = -1, cnt = -1;
+        cheer_grp_extent(g, &start, &cnt);
+        if (cnt != per_grp[g] || cnt < 15) return 0;
+        if (start != prev_end + 1) return 0;   // contiguous & ordered
+        prev_end = start + cnt - 1;
+        total += cnt;
+    }
+    return total == (int)CHEER_CARD_COUNT;
+}
+
+static int scene_bag_ok(void) {
+    for (int g = 0; g < CHEER_GRP_COUNT; g++) {
+        int start = 0, cnt = 0;
+        cheer_grp_extent(g, &start, &cnt);
+        cheer_bag_t bag;
+        cheer_bag_init_window(&bag, 77u + (uint32_t)g, (uint8_t)start,
+                              (uint8_t)cnt);
+        uint8_t seen[CHEER_BAG_MAX] = { 0 };
+        int last = -1;
+        for (int i = 0; i < cnt * 2; i++) {   // a full bag + a reshuffle
+            int c = cheer_bag_draw(&bag);
+            if (c < start || c >= start + cnt) return 0;   // stays in scene
+            if (i < cnt) {
+                if (seen[c - start]) return 0;
+                seen[c - start] = 1;
+            }
+            if (c == last) return 0;   // no immediate repeat, any boundary
+            last = c;
+        }
+    }
+    return 1;
+}
+
 static int rng_never_sticks(void) {
     uint32_t s = 0;
     for (int i = 0; i < 100; i++) {
@@ -91,8 +130,10 @@ int main(void) {
     assert(seen_all_once());
     assert(no_repeat_across_reshuffle());
     assert(stages_ok());
+    assert(groups_and_extents_ok());
+    assert(scene_bag_ok());
     assert(rng_never_sticks());
-    printf("cheer cards: library/bag/stages/rng ok (%zu cards)\n",
+    printf("cheer cards: library/bag/stages/scenes/rng ok (%zu cards)\n",
            CHEER_CARD_COUNT);
     return 0;
 }

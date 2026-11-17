@@ -16,11 +16,13 @@
 #define JOB_CHIME 1
 #define JOB_FANFARE 2
 
+typedef struct {
+    uint8_t job;
+    uint8_t stage;
+} audio_job_t;
+
 static QueueHandle_t s_job_q;
 static TaskHandle_t s_task;
-
-static const uint8_t CHIME_NOTES[] = { 72, 76, 79 };           // C5 E5 G5
-static const uint8_t FANFARE_NOTES[] = { 72, 76, 79, 84, 88 }; // + C6 E6
 
 static void play_note(uint8_t midi, int ms, float amp) {
     cheer_tone_voice_t v;
@@ -59,13 +61,16 @@ static void audio_task(void *arg) {
     (void)arg;
     bsp_audio_set_format(CHEER_TONE_SR, 16, 1);
     bsp_audio_set_volume(CHEER_AUDIO_VOL);
-    int job;
+    audio_job_t job;
     for (;;) {
         if (xQueueReceive(s_job_q, &job, portMAX_DELAY) == pdTRUE) {
-            if (job == JOB_FANFARE) {
-                play_seq(FANFARE_NOTES, 5, 170, 25, 0.85f);
-            } else {
-                play_seq(CHIME_NOTES, 3, 150, 30, 0.8f);
+            uint8_t notes[8];
+            int n = cheer_chime_notes(job.stage, job.job == JOB_FANFARE,
+                                      notes, (int)sizeof(notes));
+            if (n > 0) {
+                play_seq(notes, n, job.job == JOB_FANFARE ? 170 : 150,
+                         job.job == JOB_FANFARE ? 25 : 30,
+                         job.job == JOB_FANFARE ? 0.85f : 0.8f);
             }
         }
     }
@@ -82,8 +87,11 @@ esp_err_t cheer_audio_init(void) {
     return ESP_OK;
 }
 
-void cheer_audio_play_chime(bool fanfare) {
+void cheer_audio_play_chime(bool fanfare, int stage) {
     if (!s_job_q) return;
-    int job = fanfare ? JOB_FANFARE : JOB_CHIME;
+    audio_job_t job = {
+        .job = fanfare ? JOB_FANFARE : JOB_CHIME,
+        .stage = (uint8_t)stage,
+    };
     (void)xQueueSend(s_job_q, &job, 0);
 }

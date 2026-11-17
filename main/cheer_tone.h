@@ -1,9 +1,17 @@
 // cheer_tone.h - Q15 integer wavetable synth, ported from ear_tone.c. PURE C.
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
+#include "cheer.h"
+
 #define CHEER_TONE_SR 16000
+
+// v1.3 growth-scale chimes: root note and note set for a growth stage.
+// PURE so host tests can pin monotonicity and bounds.
+uint8_t cheer_chime_root(int stage);
+int cheer_chime_notes(int stage, bool fanfare, uint8_t *out, int cap);
 
 typedef struct {
     uint32_t phase;      // 1.31 phase accumulator

@@ -137,6 +137,48 @@ const cheer_card_t CHEER_CARDS[] = {
     { "提加薪的三\n个理由，\n写得漂亮", CHEER_GRP_BRAVE },
     { "独自看完恐怖片，没快进", CHEER_GRP_BRAVE },
     { "对医生的疑\n问，问清\n楚了才走", CHEER_GRP_BRAVE },
+    // ---- NIGHT 夜猫子 ----
+    { "凌晨一点只剩\n你和电脑醒着", CHEER_GRP_NIGHT },
+    { "熬的不是夜，\n是一点没人\n打扰的清净", CHEER_GRP_NIGHT },
+    { "夜宵泡得再糊\n也暖了胃和心", CHEER_GRP_NIGHT },
+    { "手机又刷到\n两点，屏幕\n也替你困了", CHEER_GRP_NIGHT },
+    { "失眠的时候\n连脑子都在\n加班，辛苦", CHEER_GRP_NIGHT },
+    { "夜里的灵感\n白天不认账\n也是灵感", CHEER_GRP_NIGHT },
+    { "想通了一件事\n这觉睡得值", CHEER_GRP_NIGHT },
+    { "晚风没催你\n睡，免费陪\n到这会儿", CHEER_GRP_NIGHT },
+    { "台灯陪你熬\n到现在，没\n半句怨言", CHEER_GRP_NIGHT },
+    { "又是全世界\n都睡了的\n清静时候", CHEER_GRP_NIGHT },
+    { "眼睛酸了就\n闭一会儿，\n卡不着急", CHEER_GRP_NIGHT },
+    { "夜是你的，\n黑眼圈也算\n独家配饰", CHEER_GRP_NIGHT },
+    { "加班到这个点\n你比报表重要", CHEER_GRP_NIGHT },
+    { "外面的路灯\n陪你亮着，\n不止你一个", CHEER_GRP_NIGHT },
+    { "凌晨的安静是\n你一个人包场", CHEER_GRP_NIGHT },
+    { "睡前定好了\n闹钟，明天\n有人接你", CHEER_GRP_NIGHT },
+    { "熬夜的你仍\n记得喝水，\n很可以", CHEER_GRP_NIGHT },
+    { "夜色免费，\n你多享受了\n好几个小时", CHEER_GRP_NIGHT },
+    { "明早的你也许\n会骂现在的你\n先夸为敬", CHEER_GRP_NIGHT },
+    { "世界睡了，\n你还醒着赚\n到了安静", CHEER_GRP_NIGHT },
+    // ---- OUT 出门在外 ----
+    { "行李箱轮子\n一路响，像\n给你打拍子", CHEER_GRP_OUT },
+    { "陌生城市\n都没迷路，\n方向感在线", CHEER_GRP_OUT },
+    { "你给人让了\n座，这一站\n你最高", CHEER_GRP_OUT },
+    { "充电宝带了\n出门，人生\n稳了一半", CHEER_GRP_OUT },
+    { "高铁上啃完\n半本书，这\n趟值了", CHEER_GRP_OUT },
+    { "伞在包里，天\n气预报也得\n让你三分", CHEER_GRP_OUT },
+    { "问了路，顺\n便把胆量和\n礼貌都练了", CHEER_GRP_OUT },
+    { "排队排得心\n平气和，修\n为可以", CHEER_GRP_OUT },
+    { "证件钱包都\n在身上，今\n天很靠谱", CHEER_GRP_OUT },
+    { "打包了家乡\n的味道，走\n多远都有底", CHEER_GRP_OUT },
+    { "车票订得比\n谁都早，从\n不赶时间", CHEER_GRP_OUT },
+    { "走了一天还\n抬头看了晚\n霞，好状态", CHEER_GRP_OUT },
+    { "陌生的路口\n也敢自己拍\n板，成长了", CHEER_GRP_OUT },
+    { "住的地方虽\n小，收拾得\n像个家", CHEER_GRP_OUT },
+    { "想家就打了\n电话，你做\n得对", CHEER_GRP_OUT },
+    { "出差还带了\n运动鞋，是\n懂生活的", CHEER_GRP_OUT },
+    { "在外喝够水\n吃饱饭，把\n自己照顾好", CHEER_GRP_OUT },
+    { "落地就报了\n平安，靠的\n是你", CHEER_GRP_OUT },
+    { "旅途的囧事\n以后都是段\n子，先存着", CHEER_GRP_OUT },
+    { "一个人在外\n也把日子过\n明白了", CHEER_GRP_OUT },
 };
 
 const size_t CHEER_CARD_COUNT = sizeof(CHEER_CARDS) / sizeof(CHEER_CARDS[0]);
@@ -150,9 +192,11 @@ uint32_t cheer_rng_next(uint32_t *state) {
     return *state;
 }
 
-void cheer_bag_init(cheer_bag_t *bag, uint32_t seed, uint8_t count) {
+static void bag_shuffle(cheer_bag_t *bag, uint32_t seed, uint8_t base,
+                        uint8_t count) {
     bag->rng = seed ? seed : 1u;
     bag->count = count;
+    bag->base = base;
     bag->pos = 0;
     bag->last = -1;
     for (uint8_t i = 0; i < count; i++) bag->order[i] = i;
@@ -164,7 +208,7 @@ void cheer_bag_init(cheer_bag_t *bag, uint32_t seed, uint8_t count) {
         bag->order[r] = t;
     }
     // An all-identity shuffle is statistically possible for tiny decks;
-    // with 124 cards it cannot happen, but guard anyway: swap the first two
+    // with 164 cards it cannot happen, but guard anyway: swap the first two
     // if the bag came out fully sorted (deterministic, test-friendly).
     bool sorted = true;
     for (uint8_t i = 0; i < count; i++) {
@@ -176,22 +220,39 @@ void cheer_bag_init(cheer_bag_t *bag, uint32_t seed, uint8_t count) {
     }
 }
 
+void cheer_bag_init(cheer_bag_t *bag, uint32_t seed, uint8_t count) {
+    bag_shuffle(bag, seed, 0, count);
+}
+
+void cheer_bag_init_window(cheer_bag_t *bag, uint32_t seed, uint8_t base,
+                           uint8_t count) {
+    bag_shuffle(bag, seed, base, count);
+}
+
+void cheer_grp_extent(int grp, int *start, int *count) {
+    int s = -1, c = 0;
+    for (size_t i = 0; i < CHEER_CARD_COUNT; i++) {
+        if (CHEER_CARDS[i].grp == grp) {
+            if (s < 0) s = (int)i;
+            c++;
+        }
+    }
+    if (start) *start = s < 0 ? 0 : s;
+    if (count) *count = c;
+}
+
 int cheer_bag_draw(cheer_bag_t *bag) {
     if (bag->count == 0) return -1;
     if (bag->pos >= bag->count) {
         int16_t prev_last = bag->last;
-        cheer_bag_t fresh;
-        cheer_bag_init(&fresh, cheer_rng_next(&bag->rng), bag->count);
-        // keep the new rng state and deck, but preserve the no-repeat rule
-        bag->rng = fresh.rng;
-        for (uint8_t i = 0; i < bag->count; i++) bag->order[i] = fresh.order[i];
-        bag->pos = 0;
-        if (bag->order[0] == prev_last && bag->count > 1) {
+        bag_shuffle(bag, cheer_rng_next(&bag->rng), bag->base, bag->count);
+        // no-repeat rule across the reshuffle boundary (absolute indices)
+        if ((int)bag->base + bag->order[0] == prev_last && bag->count > 1) {
             bag->order[0] = bag->order[1];
-            bag->order[1] = (uint8_t)prev_last;
+            bag->order[1] = (uint8_t)(prev_last - bag->base);
         }
     }
-    int idx = bag->order[bag->pos++];
+    int idx = bag->base + bag->order[bag->pos++];
     bag->last = (int16_t)idx;
     return idx;
 }

@@ -3,6 +3,7 @@ idf_component_register(
          "ui_pixel.c"
          "ui_pixel_math.c"
          "cheer_cards.c"
+         "cheer_fav.c"
          "cheer_tone.c"
          "cheer_audio.c"
          "cheer_store.c"

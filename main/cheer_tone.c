@@ -89,3 +89,26 @@ void cheer_tone_mix(int16_t *dst, const int16_t *src, int n) {
 float cheer_tone_freq(uint8_t midi) {
     return 440.0f * powf(2.0f, ((int)midi - 69) / 12.0f);
 }
+
+uint8_t cheer_chime_root(int stage) {
+    if (stage < 0) stage = 0;
+    if (stage >= CHEER_STAGE_COUNT) stage = CHEER_STAGE_COUNT - 1;
+    return (uint8_t)(72 + stage);   // C5 .. F5: brighter as the spirit grows
+}
+
+int cheer_chime_notes(int stage, bool fanfare, uint8_t *out, int cap) {
+    if (!out || cap < 3) return 0;
+    uint8_t r = cheer_chime_root(stage);
+    int n = 0;
+    out[n++] = r;
+    out[n++] = (uint8_t)(r + 4);
+    out[n++] = (uint8_t)(r + 7);
+    if (fanfare) {
+        if (cap < n + 2) return 0;
+        out[n++] = (uint8_t)(r + 12);
+        out[n++] = (uint8_t)(r + 16);
+    } else if (stage >= 3 && cap >= 4) {
+        out[n++] = (uint8_t)(r + 12);   // octave sparkle at bright stages
+    }
+    return n;
+}
