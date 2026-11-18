@@ -24,6 +24,7 @@ void ear_store_load(ear_save_t *out) {
     out->duets = 0;
     out->best_combo = 0;
     out->melodies = 0;
+    out->treats = 0;
     memset(out->kind_miss, 0, sizeof(out->kind_miss));
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
@@ -45,6 +46,9 @@ void ear_store_load(ear_save_t *out) {
     if (nvs_get_u32(h, "du", &cnt) == ESP_OK) out->duets = cnt;
     if (nvs_get_u32(h, "mel", &cnt) == ESP_OK) out->melodies = cnt;
     if (nvs_get_u8(h, "cmb", &v) == ESP_OK) out->best_combo = v;
+    if (nvs_get_u32(h, "tr", &cnt) == ESP_OK) {
+        out->treats = cnt > EAR_PET_TREATS_MAX ? EAR_PET_TREATS_MAX : cnt;
+    }
     size_t blob = 0;
     if (nvs_get_blob(h, "km", NULL, &blob) == ESP_OK) {
         if (blob >= sizeof(out->kind_miss)) {
@@ -77,6 +81,7 @@ void ear_store_save(const ear_save_t *s) {
     nvs_set_u32(h, "du", s->duets);
     nvs_set_u32(h, "mel", s->melodies);
     nvs_set_u8(h, "cmb", s->best_combo);
+    nvs_set_u32(h, "tr", s->treats);
     nvs_set_blob(h, "km", s->kind_miss, sizeof(s->kind_miss));
     nvs_commit(h);
     nvs_close(h);

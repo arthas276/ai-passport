@@ -18,6 +18,8 @@ typedef struct {
     uint32_t melodies;   // lifetime melodies with every note OK (v1.4, key
                          // "mel"; partial credit earns XP but not this)
     uint8_t best_combo;  // lifetime best combo (v1.2)
+    uint32_t treats;      // treat bank (v2.1, key "tr"; +1 per perfect quiz
+                         // run, cap 9, spent on the PLAY screen)
     uint32_t kind_miss[EAR_KIND_COUNT];  // wrong answers per kind (v1.8,
                          // blob "km"; biases question draws to weaknesses)
 } ear_save_t;

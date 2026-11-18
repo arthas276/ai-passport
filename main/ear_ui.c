@@ -41,7 +41,7 @@ static bool s_evolve_pending;    // stage changed, celebrate at HOME entry
 // ---- current screen ----
 typedef enum {
     SCR_HOME, SCR_QUIZ, SCR_SING, SCR_DUET, SCR_DICTATION, SCR_RESULT, SCR_SETUP,
-    SCR_RESET, SCR_RHY, SCR_SIGHTSING,
+    SCR_RESET, SCR_RHY, SCR_SIGHTSING, SCR_PLAY, SCR_STATS,
 } ear_screen_t;
 static ear_screen_t s_scr;
 
@@ -87,6 +87,10 @@ static bool s_review;
 static uint8_t s_review_pool[EAR_KIND_COUNT];
 static uint8_t s_review_pool_n;
 
+// ---- pet mood (v2.1): session-scoped RAM, only touched from the UI task ----
+static ear_pet_mood_t s_mood;
+static uint32_t s_mood_ms;        // ms stamp of the last mood tick (pump)
+
 // ---- LVGL objects per screen (only the active screen objects exist) ----
 static lv_obj_t *h_scr, *h_title, *h_batt, *h_pet, *h_bar, *h_xp_lbl;
 static lv_obj_t *h_mode_card;   // rounded mode card (name + mastery stars)
@@ -106,6 +110,9 @@ static lv_obj_t *rs_scr, *rs_title, *rs_warn, *rs_hint;   // RESET confirm page
 static lv_obj_t *rh_scr, *rh_prog, *rh_status, *rh_taps_lbl, *rh_hint;
 static lv_obj_t *ss_scr, *ss_title, *ss_prog, *ss_notes, *ss_sung, *ss_status,
     *ss_hint;
+static lv_obj_t *pl_scr, *pl_pet, *pl_mood, *pl_treats, *pl_react, *pl_hint;
+static lv_obj_t *st_scr, *st_title, *st_rows, *st_hint;   // STATS (v2.1)
+static lv_timer_t *s_play_timer;   // one-shot revert for PLAY reactions
 
 // ---- helpers ----
 // Null-safe label update; objects of inactive screens do not exist.
@@ -206,6 +213,15 @@ static void note_activity(void) {
     }
 }
 
+// Mood lazy tick (v2.1): advance the pet's idle decay by the wall time since
+// the last pump, then stamp. Any cadence yields the same joy because the
+// decay only applies to time beyond the 30 s grace window.
+static void mood_pump(void) {
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    ear_pet_mood_tick(&s_mood, now - s_mood_ms);
+    s_mood_ms = now;
+}
+
 // ---- forward declarations (later screens referenced earlier) ----
 static void enter_result(void);
 static void enter_vs_result(void);
@@ -217,11 +233,12 @@ static void enter_dictation(void);
 static void enter_setup(void);
 // ---- HOME ----
 // Mode card names (index = s_mode_card: 0 INTERVAL 1 CHORD 2 SING 3 DUET
-// 4 DICTATION 5 VS 6 RHYTHM 7 SIGHTSING 8 REVIEW 9 SETUP).
-static const char *MODE_NAMES[10] = {
+// 4 DICTATION 5 VS 6 RHYTHM 7 SIGHTSING 8 PLAY 9 REVIEW 10 STATS 11 SETUP).
+static const char *MODE_NAMES[12] = {
     "MODE: INTERVAL", "MODE: CHORD", "MODE: SING", "MODE: DUET",
     "MODE: DICTATION", "MODE: VS BATTLE", "MODE: RHYTHM",
-    "MODE: SIGHTSING", "MODE: REVIEW", "MODE: SETUP",
+    "MODE: SIGHTSING", "MODE: PLAY", "MODE: REVIEW", "MODE: STATS",
+    "MODE: SETUP",
 };
 
 // Battery text: --% when CW2017 read fails (graceful degrade).
@@ -236,9 +253,9 @@ static void battery_text(char *out, size_t n) {
 
 // v1.9: per-mode mastery stars on HOME. One filled pip per level; slot count
 // is the mode's level ceiling (quiz modes 5, pitch-flow modes 3). Modes
-// without a level scale (duet / VS / setup) hide the row. Card indices match
-// MODE_NAMES: 0 INTERVAL 1 CHORD 2 SING 3 DUET 4 DICTATION 5 VS 6 RHYTHM
-// 7 SIGHTSING 8 SETUP.
+// without a level scale (duet / VS / play / review / stats / setup) hide the
+// row. Card indices match MODE_NAMES: 0 INTERVAL 1 CHORD 2 SING 3 DUET
+// 4 DICTATION 5 VS 6 RHYTHM 7 SIGHTSING.
 static void mode_levels(uint8_t card, uint8_t *lvl, uint8_t *max) {
     switch (card) {
     case 0: *lvl = s_save.ilvl; *max = EAR_QUIZ_LEVEL_MAX; return;
@@ -586,6 +603,8 @@ static void quiz_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 static void grade_answer(void) {
     s_awaiting_answer = false;
     bool correct = ear_model_grade(&s_sess, &s_q, s_cursor);
+    ear_pet_mood_event(&s_mood,
+                       correct ? EAR_MOOD_EV_CORRECT : EAR_MOOD_EV_WRONG);
     if (s_vs) ear_vs_record(&s_vsst, correct);   // v1.7 VS scoring
     if (!correct) {                              // v1.8 weakness tracking
         s_save.kind_miss[s_q.answer]++;
@@ -1679,6 +1698,7 @@ static void enter_result(void) {
     if (ear_model_perfect(&s_sess)) {
         award_xp(EAR_XP_PERFECT);
         s_sess_xp += EAR_XP_PERFECT;
+        (void)ear_pet_treat_earn(&s_save.treats);   // v2.1 perfect run = treat
     }
     if (s_review) {   // v2.0: no level adjust for review sessions
         ear_store_save(&s_save);
@@ -1736,6 +1756,151 @@ static void enter_result_common(uint8_t score, uint8_t total, uint32_t xp) {
 
 // RESULT: any OK press returns to HOME (evolve fanfare fires there).
 static void result_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+    if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) enter_home();
+}
+
+// ---- PLAY (v2.1): pet interactions ----
+// OK pets the pet (small mood bump, happy frame, chirp); UP feeds a treat
+// (bigger bump, eat frame, sparkle cue); DOWN pets too. Reactions revert to
+// the idle frame through a paused-by-default one-shot LVGL timer.
+static void play_timer_cb(lv_timer_t *t) {
+    (void)t;
+    if (s_scr != SCR_PLAY || !pl_pet) return;
+    lv_image_set_src(pl_pet, &EAR_PET_IMG[ear_pet_stage(s_save.xp)][0]);
+    if (pl_react) lv_label_set_text(pl_react, "");
+    lv_timer_pause(s_play_timer);
+}
+
+static void play_refresh(void) {
+    char t[40];
+    snprintf(t, sizeof(t), "MOOD %s",
+             ear_pet_mood_name(ear_pet_mood_get(&s_mood)));
+    lbl(pl_mood, t, C_TEXT);
+    snprintf(t, sizeof(t), "TREATS %lu", (unsigned long)s_save.treats);
+    lbl(pl_treats, t, C_GOLD);
+}
+
+// Show a reaction: swap the pet frame (2 happy / 3 eat), set the reaction
+// line, revert to idle after ms. The caller plays the audio cue.
+static void play_react(const char *text, uint8_t frame, uint32_t ms) {
+    if (!pl_pet) return;
+    lv_image_set_src(pl_pet, &EAR_PET_IMG[ear_pet_stage(s_save.xp)][frame]);
+    if (pl_react) lbl(pl_react, text, C_GOLD);
+    if (s_play_timer) {
+        lv_timer_set_period(s_play_timer, ms);
+        lv_timer_reset(s_play_timer);
+        lv_timer_resume(s_play_timer);
+    }
+}
+
+static void enter_play(void) {
+    if (pl_scr) { lv_obj_delete(pl_scr); pl_scr = NULL; }
+    s_scr = SCR_PLAY;
+    pl_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(pl_scr, lv_color_hex(C_BG), 0);
+
+    lv_obj_t *title = lv_label_create(pl_scr);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(C_TEXT), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+    lv_label_set_text(title, "PLAY");
+
+    pl_pet = lv_image_create(pl_scr);
+    lv_image_set_src(pl_pet, &EAR_PET_IMG[ear_pet_stage(s_save.xp)][0]);
+    lv_obj_align(pl_pet, LV_ALIGN_TOP_MID, 0, 64);
+
+    pl_mood = lv_label_create(pl_scr);
+    lv_obj_set_style_text_font(pl_mood, &lv_font_montserrat_14, 0);
+    lv_obj_align(pl_mood, LV_ALIGN_TOP_MID, 0, 124);
+
+    pl_treats = lv_label_create(pl_scr);
+    lv_obj_set_style_text_font(pl_treats, &lv_font_montserrat_14, 0);
+    lv_obj_align(pl_treats, LV_ALIGN_TOP_MID, 0, 146);
+
+    pl_react = lv_label_create(pl_scr);
+    lv_obj_set_style_text_font(pl_react, &lv_font_montserrat_20, 0);
+    lv_obj_align(pl_react, LV_ALIGN_TOP_MID, 0, 196);
+    lv_label_set_text(pl_react, "");
+
+    if (!s_play_timer) s_play_timer = lv_timer_create(play_timer_cb, 800, NULL);
+    lv_timer_pause(s_play_timer);
+
+    pl_hint = hint_pill_create(pl_scr);
+    hint_pill_set(pl_hint, "OK PET  UP FEED", "OKL BACK");
+    lv_screen_load(pl_scr);
+    play_refresh();
+    log_heap("play");
+}
+
+static void play_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+    if (ev == BSP_BTN_LONG && btn == BSP_BTN_OK) { enter_home(); return; }
+    if (ev != BSP_BTN_CLICK) return;
+    if (btn == BSP_BTN_UP) {                     // FEED
+        if (ear_pet_treat_feed(&s_save.treats)) {
+            ear_store_save(&s_save);
+            ear_pet_mood_event(&s_mood, EAR_MOOD_EV_FEED);
+            play_react("*MUNCH*", 3, 900);
+            ear_audio_play_cue(3);
+        } else {
+            play_react("NO TREATS", 0, 700);
+        }
+    } else if (btn == BSP_BTN_OK || btn == BSP_BTN_DOWN) {   // PET
+        ear_pet_mood_event(&s_mood, EAR_MOOD_EV_PET);
+        play_react("*CHIRP*", 2, 700);
+        ear_audio_play_cue(0);
+    }
+    play_refresh();
+}
+
+// ---- STATS (v2.1): career page from existing NVS data ----
+// Lifetime counters, the miss-book total with its weakest kind, and the
+// treat bank. Pure reads of the persisted save: no new counters.
+static void enter_stats(void) {
+    if (st_scr) { lv_obj_delete(st_scr); st_scr = NULL; }
+    s_scr = SCR_STATS;
+    st_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(st_scr, lv_color_hex(C_BG), 0);
+
+    st_title = lv_label_create(st_scr);
+    lv_obj_set_style_text_font(st_title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(st_title, lv_color_hex(C_TEXT), 0);
+    lv_obj_align(st_title, LV_ALIGN_TOP_MID, 0, 8);
+    lv_label_set_text(st_title, "STATS");
+
+    uint32_t miss_total = ear_model_review_total(s_save.kind_miss);
+    uint8_t worst = 0;
+    for (int i = 1; i < (int)EAR_KIND_COUNT; i++) {
+        if (s_save.kind_miss[i] > s_save.kind_miss[worst]) worst = (uint8_t)i;
+    }
+    char t[160];
+    int n = snprintf(t, sizeof(t),
+        "STAGE %s\nXP %lu\nQUIZ OK %lu\nSING %lu\nDUETS %lu\nMELODIES %lu\n"
+        "COMBO %u  TREATS %lu\nMISS %lu",
+        ear_pet_stage_name(ear_pet_stage(s_save.xp)),
+        (unsigned long)s_save.xp, (unsigned long)s_save.answered,
+        (unsigned long)s_save.sing_pass, (unsigned long)s_save.duets,
+        (unsigned long)s_save.melodies, (unsigned)s_save.best_combo,
+        (unsigned long)s_save.treats, (unsigned long)miss_total);
+    if (miss_total > 0 && n > 0 && (size_t)n < sizeof(t) - 8) {
+        snprintf(t + n, sizeof(t) - (size_t)n, "  %s", EAR_KINDS[worst].label);
+    }
+
+    st_rows = lv_label_create(st_scr);
+    lv_obj_set_style_text_font(st_rows, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(st_rows, lv_color_hex(C_MUTED), 0);
+    lv_obj_set_style_text_align(st_rows, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(st_rows, LV_ALIGN_TOP_MID, 0, 44);
+    lv_obj_set_width(st_rows, 224);
+    lv_label_set_long_mode(st_rows, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(st_rows, t);
+
+    st_hint = hint_pill_create(st_scr);
+    hint_pill_set(st_hint, "OK BACK", NULL);
+    lv_screen_load(st_scr);
+    log_heap("stats");
+}
+
+static void stats_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     if (ev == BSP_BTN_CLICK && btn == BSP_BTN_OK) enter_home();
 }
 
@@ -1865,14 +2030,15 @@ static void setup_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 // ---- public dispatchers ----
 void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     note_activity();
+    mood_pump();
     switch (s_scr) {
     case SCR_HOME:
         if (ev != BSP_BTN_CLICK) return;
         if (btn == BSP_BTN_UP) {
-            s_mode_card = (uint8_t)((s_mode_card + 9) % 10);
+            s_mode_card = (uint8_t)((s_mode_card + 11) % 12);
             home_refresh();
         } else if (btn == BSP_BTN_DOWN) {
-            s_mode_card = (uint8_t)((s_mode_card + 1) % 10);
+            s_mode_card = (uint8_t)((s_mode_card + 1) % 12);
             home_refresh();
         } else if (btn == BSP_BTN_OK) {
             if (s_mode_card == 0) enter_quiz(EAR_MODE_INTERVAL);
@@ -1883,7 +2049,9 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             else if (s_mode_card == 5) enter_vs();
             else if (s_mode_card == 6) enter_rhythm();
             else if (s_mode_card == 7) enter_sightsing();
-            else if (s_mode_card == 8) enter_review();
+            else if (s_mode_card == 8) enter_play();
+            else if (s_mode_card == 9) enter_review();
+            else if (s_mode_card == 10) enter_stats();
             else enter_setup();
         }
         break;
@@ -1893,6 +2061,8 @@ void ear_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     case SCR_DICTATION: dict_key(btn, ev); break;
     case SCR_RHY: rh_key(btn, ev); break;
     case SCR_SIGHTSING: ss_key(btn, ev); break;
+    case SCR_PLAY: play_key(btn, ev); break;
+    case SCR_STATS: stats_key(btn, ev); break;
     case SCR_RESULT: result_key(btn, ev); break;
     case SCR_SETUP: setup_key(btn, ev); break;
     case SCR_RESET: reset_key(btn, ev); break;
@@ -1917,6 +2087,8 @@ void ear_ui_handle_audio(ear_audio_event_t *ev) {
 void ear_ui_init(QueueHandle_t app_q) {
     s_app_q = app_q;   // reserved for future deferred events
     ear_store_load(&s_save);
+    ear_pet_mood_init(&s_mood);
+    s_mood_ms = (uint32_t)(esp_timer_get_time() / 1000);
     srand((unsigned)esp_random());
     bsp_audio_set_volume(s_save.vol);
 

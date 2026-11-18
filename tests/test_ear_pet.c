@@ -1,6 +1,8 @@
-// Host test for pet progression: thresholds, monotonicity, helpers.
+// Host test for pet progression: thresholds, monotonicity, helpers,
+// plus v2.1 mood state and the treat bank.
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include "ear_game.h"
 
 int main(void)
@@ -55,6 +57,60 @@ int main(void)
         assert((int)st >= (int)prev);
         prev = st;
     }
-    printf("pet: thresholds + helpers ok (v1.7 endgame ranks)\n");
+
+    // v2.1 mood: init CONTENT (45); events clamp at 0/100 and map the four
+    // labels; idle decay only starts past the 30 s grace window.
+    ear_pet_mood_t m;
+    ear_pet_mood_init(&m);
+    assert(m.joy == 30);
+    assert(ear_pet_mood_get(&m) == EAR_MOOD_CONTENT);
+    for (int i = 0; i < 20; i++) ear_pet_mood_event(&m, EAR_MOOD_EV_FEED);
+    assert(m.joy == 100);
+    assert(ear_pet_mood_get(&m) == EAR_MOOD_JOY);
+    for (int i = 0; i < 40; i++) ear_pet_mood_event(&m, EAR_MOOD_EV_WRONG);
+    assert(m.joy == 0);
+    assert(ear_pet_mood_get(&m) == EAR_MOOD_SLEEPY);
+    for (int i = 0; i < 5; i++) ear_pet_mood_event(&m, EAR_MOOD_EV_PET);
+    assert(m.joy == 50);
+    assert(ear_pet_mood_get(&m) == EAR_MOOD_HAPPY);
+    assert(strcmp(ear_pet_mood_name(EAR_MOOD_SLEEPY), "SLEEPY") == 0);
+    assert(strcmp(ear_pet_stage_name(EAR_STAGE_LEGEND), "LEGEND") == 0);
+
+    // Decay: grace window first, then -1 per 2 s; the same total idle time
+    // yields the same joy whether ticked per 2 s or in one lazy pump.
+    ear_pet_mood_init(&m);
+    ear_pet_mood_tick(&m, EAR_MOOD_GRACE_MS);
+    assert(m.joy == 30);              // still inside the grace window
+    ear_pet_mood_tick(&m, EAR_MOOD_DECAY_MS - 1);
+    assert(m.joy == 30);              // below one decay step
+    ear_pet_mood_tick(&m, 1);
+    assert(m.joy == 29);              // exact step boundary
+    for (int i = 0; i < 28; i++) ear_pet_mood_tick(&m, EAR_MOOD_DECAY_MS);
+    assert(m.joy == 1);
+    ear_pet_mood_init(&m);            // lazy pump with the same total idle
+    ear_pet_mood_tick(&m,
+        EAR_MOOD_GRACE_MS + EAR_MOOD_DECAY_MS * 29);
+    assert(m.joy == 1);
+    for (int i = 0; i < 60; i++) ear_pet_mood_tick(&m, EAR_MOOD_DECAY_MS);
+    assert(m.joy == 0);               // decay floors at 0, never negative
+    // Any event restarts the grace window.
+    ear_pet_mood_init(&m);
+    ear_pet_mood_tick(&m, 60000);     // 15 decay steps -> joy 15
+    assert(m.joy == 15);
+    ear_pet_mood_event(&m, EAR_MOOD_EV_PET);   // joy 25, idle reset
+    ear_pet_mood_tick(&m, 20000);     // inside the new grace window
+    assert(m.joy == 25);
+
+    // v2.1 treat bank: earn caps at 9, feed drains and then refuses.
+    uint32_t tr = 0;
+    for (int i = 0; i < 12; i++) (void)ear_pet_treat_earn(&tr);
+    assert(tr == EAR_PET_TREATS_MAX);
+    assert(ear_pet_treat_feed(&tr) && tr == EAR_PET_TREATS_MAX - 1);
+    while (tr > 0) assert(ear_pet_treat_feed(&tr));
+    assert(tr == 0);
+    assert(!ear_pet_treat_feed(&tr));   // empty bank: no change, false
+    assert(tr == 0);
+
+    printf("pet: thresholds + helpers + mood + treats ok (v2.1)\n");
     return 0;
 }

@@ -3,5 +3,6 @@
 #include "ear_game.h"
 #include "lvgl.h"
 
-// Pet sprites per stage x 2 frames (48x48 RGB565, opaque, panel bg baked in).
-extern const lv_image_dsc_t EAR_PET_IMG[EAR_STAGE_COUNT][2];
+// Pet sprites per stage x 4 frames (48x48 RGB565, opaque, panel bg baked in):
+// 0 idle, 1 blink, 2 happy, 3 eat (v2.1).
+extern const lv_image_dsc_t EAR_PET_IMG[EAR_STAGE_COUNT][4];

@@ -107,3 +107,4 @@ void ear_tone_mix(int16_t *dst, const int16_t *src, int n) {
 const uint8_t EAR_CUE_CORRECT[] = {76, 79, 0};        // E5 G5 (rising, happy)
 const uint8_t EAR_CUE_WRONG[] = {64, 60, 0};          // E4 C4 (falling, neutral)
 const uint8_t EAR_CUE_EVOLVE[] = {72, 76, 79, 84, 0}; // C5 E5 G5 C6 fanfare
+const uint8_t EAR_CUE_HAPPY[] = {79, 84, 88, 0};      // G5 C6 E6 sparkle (v2.1 feed)

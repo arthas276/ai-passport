@@ -37,7 +37,7 @@ esp_err_t ear_audio_init(QueueHandle_t event_q);
 void ear_audio_play_question(uint8_t root_midi, ear_kind_t kind,
                              ear_dir_t dir, uint8_t inv);
 void ear_audio_play_target(uint8_t midi);
-void ear_audio_play_cue(int cue_id);   // 0=correct 1=wrong 2=evolve
+void ear_audio_play_cue(int cue_id);   // 0=correct 1=wrong 2=evolve 3=happy
 // ---- sing mode ----
 void ear_audio_sing_start(float target_hz, float tol_cents);
 void ear_audio_sing_cancel(void);

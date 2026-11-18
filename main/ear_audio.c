@@ -418,11 +418,12 @@ static void audio_task(void *arg) {
             post_play_done();
             break;
         case CMD_CUE: {
-            // job.root carries the cue id (0 correct / 1 wrong / 2 evolve).
-            static const uint8_t *CUES[3] = {
-                EAR_CUE_CORRECT, EAR_CUE_WRONG, EAR_CUE_EVOLVE,
+            // job.root carries the cue id (0 correct / 1 wrong / 2 evolve /
+            // 3 happy sparkle, v2.1).
+            static const uint8_t *CUES[4] = {
+                EAR_CUE_CORRECT, EAR_CUE_WRONG, EAR_CUE_EVOLVE, EAR_CUE_HAPPY,
             };
-            int id = job.root < 3 ? job.root : 0;
+            int id = job.root < 4 ? job.root : 0;
             if (bsp_audio_set_format(EAR_TONE_SR, 16, 1) == ESP_OK) {
                 bsp_audio_set_volume(s_volume);
                 play_cue(CUES[id]);

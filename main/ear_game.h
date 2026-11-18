@@ -189,6 +189,47 @@ uint32_t ear_pet_stage_floor(uint32_t xp);
 // bar shows full).
 uint32_t ear_pet_stage_ceiling(uint32_t xp);
 
+// --- pet interactions: mood + treats (v2.1) ---
+// Mood is session-scoped RAM state (no persistence: without an RTC a stored
+// "last mood" would age wrongly across power cycles). joy 0..100;
+// interactions and quiz answers move it, idle time decays it.
+#define EAR_PET_TREATS_MAX 9u      // treat bank cap (earned on perfect runs)
+#define EAR_MOOD_GRACE_MS 30000u   // idle time before joy starts decaying
+#define EAR_MOOD_DECAY_MS 2000u    // then -1 joy per further 2 s of idle
+
+typedef enum {
+    EAR_MOOD_SLEEPY = 0,           // joy < 20: neglected
+    EAR_MOOD_CONTENT,              // joy < 45
+    EAR_MOOD_HAPPY,                // joy < 75
+    EAR_MOOD_JOY,                  // everything above
+    EAR_MOOD_COUNT
+} ear_mood_t;
+
+typedef struct {
+    int16_t joy;                   // 0..100
+    uint32_t idle_ms;              // ms since the last mood event
+} ear_pet_mood_t;
+
+typedef enum {
+    EAR_MOOD_EV_PET = 0,           // petting on the PLAY screen (+10)
+    EAR_MOOD_EV_FEED,              // feeding a treat (+20)
+    EAR_MOOD_EV_CORRECT,           // correct quiz answer (+5)
+    EAR_MOOD_EV_WRONG,             // wrong quiz answer (-6)
+} ear_mood_ev_t;
+
+void ear_pet_mood_init(ear_pet_mood_t *m);            // starts CONTENT (45)
+void ear_pet_mood_event(ear_pet_mood_t *m, ear_mood_ev_t ev);
+// Advance idle time by dt_ms; beyond the grace window joy decays 1 per
+// EAR_MOOD_DECAY_MS. Call with real elapsed ms, any cadence.
+void ear_pet_mood_tick(ear_pet_mood_t *m, uint32_t dt_ms);
+ear_mood_t ear_pet_mood_get(const ear_pet_mood_t *m);
+const char *ear_pet_mood_name(ear_mood_t mood);       // "SLEEPY"..
+const char *ear_pet_stage_name(ear_stage_t st);       // "EGG".."LEGEND"
+// Treats bank: earn is capped at EAR_PET_TREATS_MAX (returns the new
+// count); feed fails (false, no change) when the bank is empty.
+uint32_t ear_pet_treat_earn(uint32_t *treats);
+bool ear_pet_treat_feed(uint32_t *treats);
+
 // --- pitch (ear_pitch.c, pure) ---
 #define EAR_PITCH_FRAME 1024          // samples per detection frame
 #define EAR_PITCH_SR 16000u           // capture rate for pitch detection
@@ -243,3 +284,4 @@ void ear_tone_mix(int16_t *dst, const int16_t *src, int n);
 extern const uint8_t EAR_CUE_CORRECT[];
 extern const uint8_t EAR_CUE_WRONG[];
 extern const uint8_t EAR_CUE_EVOLVE[];
+extern const uint8_t EAR_CUE_HAPPY[];    // v2.1 feed sparkle (G5 C6 E6)
