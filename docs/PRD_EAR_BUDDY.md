@@ -5,7 +5,24 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/ear-buddy (from main)
-> PRD version: v1.10.1 (2026-11-02: stability hotfix - LVGL now draws from
+> PRD version: v2.1 (2026-11-18: pet interactions and a career page -
+> new PLAY mode card (pet the buddy, feed treats, session mood), new
+> STATS mode card (lifetime counters, miss-book total + weakest kind,
+> treat bank; pure reads of the existing save), treat economy (a perfect
+> quiz run banks 1 treat, cap 9, NVS key "tr", feeding never touches
+> XP), pet sprites grow to 4 frames per stage (idle/blink/happy/eat;
+> the two historical frames stay byte-identical, new poses reuse the
+> same anatomy and palette), and a 4th audio cue (feed sparkle); mood
+> is session RAM moved by quiz answers and interactions, decaying past
+> 30 s idle; see 3.8/3.9/3.10/4/5/7/8/10);
+> v2.0 (2026-11-12, not documented at ship time: REVIEW mistake
+> trainer - the home card builds a miss pool from the persisted
+> kind_miss book, miss-weighted draws with 3 same-category distractors,
+> a correct answer graduates the kind and a wrong one re-enters it, an
+> empty book opens ALL CLEAR, review sessions skip the auto level
+> adjust; combo streak rewards (solo only): gold xN header from 3,
+> combo 5 = +1 XP, combo 10 = +2 XP + the evolve fanfare; see 3.8);
+> v1.10.1 (2026-11-02: stability hotfix - LVGL now draws from
 > the system heap instead of the 24 KB built-in pool, which exhausted at
 > screen-transition peaks (finishing a DICTATION round froze the device in
 > the LVGL malloc assert); every screen entry logs free-heap watermarks);
@@ -236,6 +253,45 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
   capture, UP long re-plays the note) -> SING -> GRADE -> next, 10
   melodies per session
 
+### 3.8 REVIEW mistake trainer (v2.0)
+
+- The home REVIEW card starts a 10-question quiz driven by the persisted
+  miss book (blob "km") instead of the level tables: answers draw
+  miss-weighted across intervals and chords with 3 same-category
+  distractors, on the same QUIZ screen and keys as solo practice
+- A correct answer graduates the kind (miss count -1, floor 0); a wrong
+  one re-enters it (+1). An empty book opens an ALL CLEAR screen instead
+- Review sessions skip the auto level adjust (the book itself drives the
+  practice); the perfect-run bonus still applies
+
+### 3.9 PLAY mode: pet interactions (v2.1)
+
+- A dedicated PLAY screen: OK (or DOWN) pets the buddy (+10 joy, happy
+  frame for 0.7 s, chirp cue); UP feeds a treat (+20 joy, eat frame for
+  0.9 s, sparkle cue) when the bank is not empty, otherwise the reaction
+  line says NO TREATS; OK long returns HOME
+- Mood [PURE ear_pet.c]: session-scoped joy 0..100 held in RAM only
+  (without an RTC a persisted mood would age wrongly across power
+  cycles); correct quiz answers +5, wrong -6, interactions as above;
+  past 30 s without any event joy decays 1 per 2 s. Bands: <20 SLEEPY,
+  <45 CONTENT, <75 HAPPY, else JOY (shown as "MOOD HAPPY" lines); a
+  fresh boot starts mid-CONTENT (30)
+- Treat bank: every perfect quiz run (10/10, solo or review) banks 1
+  treat, capped at 9 (NVS key "tr"); feeding spends 1 and never touches
+  XP - treats are a reward loop, not a grind
+- Pet sprites grow to 4 frames per stage (idle / blink / happy / eat);
+  the two historical frames are byte-identical and the new poses reuse
+  the same anatomy and palette (2026-10-20 design-language rule)
+
+### 3.10 STATS page (v2.1)
+
+- A career page built from existing persisted data only: stage name,
+  XP, lifetime quiz corrects / sing passes / duets / melodies, best
+  combo beside the treat bank, and the miss-book total with the weakest
+  kind label (e.g. "MISS 21  m3"); OK returns HOME
+- No new counters: per-mode accuracy is not persisted today, so the
+  page shows what the archive truly holds rather than inventing numbers
+
 ## 4. Pet Economy
 
 - Stages (cumulative XP): Egg 0 -> Hatchling 10 -> Chick 30 -> Fledgling 80
@@ -245,14 +301,20 @@ to a note sequence, infers the key, then plays the phrase back as a duet:
   duet performed +3 (v1.3); dictation perfect +2, fully correct +1, half or
   more of the notes correct +1 (v1.4); VS correct +1 either player (v1.7);
   rhythm >= 2/3 onsets +1, perfect bar +2 (v1.8); sightsing same as
-  dictation (v1.8)
+  dictation (v1.8); combo milestones +1 XP at 5 and +2 XP at 10 (v2.0,
+  solo only)
 - Weakness weighting (v1.8): wrong quiz answers bump a per-kind miss
   counter (persisted as blob "km"); question draws weight each option
   1 + min(miss, 15), so missed kinds come back more often without ever
   dominating (the anti-repeat rule still applies)
+- Treats (v2.1): a perfect quiz run banks 1 treat (cap 9, key "tr"),
+  spent on the PLAY screen for a mood boost, never for XP
+- Mood (v2.1): session joy 0..100 driven by quiz answers and PLAY
+  interactions, decaying when idle (see 3.9); display-only, no XP link
 - Reactions: correct -> pet hop + happy blip; wrong -> head shake; evolve ->
   stage image swap + fanfare + hop x3
-- XP never decreases (no-punishment principle); no dates, no streaks
+- XP never decreases (no-punishment principle); no dates; the v2.0
+  combo milestones are per-session, not daily streaks
 - NVS read failure -> treat as new pet, rebuild archive, no crash
 
 ## 5. Screens & Button Semantics (redesigned UI, not the demo shell)
@@ -261,14 +323,16 @@ HOME
 - top: "EAR BUDDY" title + battery % top-right
 - center: pet sprite 48x48 + XP bar (180x10) + "LV n cur/next" text
 - bottom: mode card cycling INTERVAL / CHORD / SING / DUET / DICTATION /
-  VS BATTLE / RHYTHM / SIGHTSING / SETUP via UP/DOWN (v1.3 adds DUET; v1.4
-  adds DICTATION; v1.7 adds VS BATTLE; v1.8 adds RHYTHM and SIGHTSING);
-  v1.10 renders the card as a 216x64 rounded panel with a gold border
-  holding the mode name and its stars
+  VS BATTLE / RHYTHM / SIGHTSING / PLAY / REVIEW / STATS / SETUP via
+  UP/DOWN (v1.3 adds DUET; v1.4 adds DICTATION; v1.7 adds VS BATTLE;
+  v1.8 adds RHYTHM and SIGHTSING; v2.0 adds REVIEW; v2.1 adds PLAY and
+  STATS); v1.10 renders the card as a 216x64 rounded panel with a gold
+  border holding the mode name and its stars
 - mastery star row inside the mode card (v1.9, repositioned v1.10): one
   lit pip per level
   reached; slot count follows the mode's level ceiling (quiz modes 5,
-  leveled pitch-flow modes 3; DUET/VS/SETUP show no stars)
+  leveled pitch-flow modes 3; DUET/VS/PLAY/REVIEW/STATS/SETUP show no
+  stars)
 - UP/DOWN click: switch mode card; OK click: enter mode; OK long: nothing
 
 QUIZ (solo and VS)
@@ -322,6 +386,15 @@ SETUP
   HOME, any key cancels; page added v1.5)
 - battery top-right
 
+PLAY (v2.1)
+- pet sprite + "MOOD <band>" and "TREATS n" lines plus a transient gold
+  reaction line ("*CHIRP*" / "*MUNCH*" / "NO TREATS"); hint pill
+  "OK PET  UP FEED / OKL BACK"; keys and rules in 3.9
+
+STATS (v2.1)
+- eight centered lifetime rows (see 3.10); hint pill "OK BACK";
+  OK returns HOME
+
 Global: every screen ends in a 232x52 rounded hint pill (C_CARD fill,
   C_PILL_BR border) holding one or two centered Montserrat-14 lines; each
   line is capped at 204 px by tests/test_hint_budget.py, which freezes the
@@ -330,12 +403,12 @@ Implemented in ear_ui.
 
 ## 6. Button Map (uniform)
 
-| Input | HOME | QUIZ | SING | DUET | DICTATION | RESULT | SETUP |
-|---|---|---|---|---|---|---|---|
-| UP/DOWN click | switch card | move cursor | UP=replay | UP=re-sing | UP=replay melody | - | select/adjust |
-| OK click | enter mode | confirm answer | start attempt | start/confirm/play-next | listen/sing/next | to HOME | save+back |
-| OK long | - | quit session | quit | quit | quit session | - | RESET row: open confirm page |
-| UP long | - | replay audio | - | - | - | - | - |
+| Input | HOME | QUIZ | SING | DUET | DICTATION | RESULT | SETUP | PLAY | STATS |
+|---|---|---|---|---|---|---|---|---|---|
+| UP/DOWN click | switch card | move cursor | UP=replay | UP=re-sing | UP=replay melody | - | select/adjust | UP=feed, DOWN=pet | - |
+| OK click | enter mode | confirm answer | start attempt | start/confirm/play-next | listen/sing/next | to HOME | save+back | pet the buddy | to HOME |
+| OK long | - | quit session | quit | quit | quit session | - | RESET row: open confirm page | back to HOME | - |
+| UP long | - | replay audio | - | - | - | - | - | - | - |
 
 OK-long quit never revokes earned XP (XP booked + NVS-written at the moment
 of each correct answer / PASS).
@@ -350,6 +423,8 @@ dlvl u8 (dictation level 1-3) key "dl" + melodies u32 key "mel"
 (lifetime melodies with every target note OK - partial credit earns XP but
   does not count here; both v1.4 — old records default to 1 / 0);
 rlvl u8 key "rl" + vlvl u8 key "vl" (rhythm/sightsing levels, v1.8);
+treats u32 key "tr" (v2.1: perfect-run treat bank, cap 9; old records
+  default to 0);
 kind_miss u32[EAR_KIND_COUNT] blob "km" (per-kind wrong answers feeding
 the weighted quiz draw, v1.8).
 Read failure -> defaults (new pet). Write on XP change (1-2x per session,
@@ -362,7 +437,8 @@ main/
   ear_game.h        - shared types/constants (XP rules, stage thresholds,
                       note table C4-A4, level option tables, colors)
   ear_model.c/h     - [PURE] question gen / grading / level adjust / session
-  ear_pet.c/h       - [PURE] XP->stage mapping / feed / evolve checks
+  ear_pet.c/h       - [PURE] XP->stage mapping / mood state / treat bank
+                      (v2.1) / progress helpers
   ear_pitch.c/h     - [PURE] autocorrelation f0 + interpolation + conf +
                       cents + note-name helper
   ear_duet.c/h      - [PURE] phrase segmentation / key inference /
@@ -374,13 +450,14 @@ main/
   ear_tone.c/h      - [PURE] additive synth into int16 buffer (C4-A4 table)
   ear_store.c/h     - NVS load/save (namespace earbuddy)
   ear_audio.c/h     - audio worker task: play queue + mic->pitch->event queue
-  ear_ui.c/h        - 6 LVGL pages + backlight idle manager
-  ear_assets.c/h    - pet sprites 8 stages x 2 frames, 48x48 RGB565
-                      descriptors (generated)
+  ear_ui.c/h        - 12 LVGL pages + backlight idle manager
+  ear_assets.c/h    - pet sprites 8 stages x 4 frames (idle/blink/happy/
+                      eat, v2.1), 48x48 RGB565 descriptors (generated)
 tools/gen_pet_assets.py - pixel-art generator (code-drawn egg/chick/bird ->
                       RGB565 C arrays)
 tests/test_ear_model.c   - question uniqueness/grading/level boundaries
-tests/test_ear_pet.c     - thresholds/XP monotonic/perfect bonus
+tests/test_ear_pet.c     - thresholds/XP monotonic/perfect bonus + mood
+                       bands/decay cadence/treat cap + feed (v2.1)
 tests/test_ear_pitch.c   - synthetic sine PCMs -> detected pitch within tol
 tests/test_ear_dictation.c - level shapes/no repeats/octave-fold grading,
                        per-level tolerance, no-shift extras, partial credit
@@ -417,6 +494,9 @@ gcc -std=c11 -Wall -Wextra -Werror. Registered in tools/validate.sh
 | Idle backlight 30% after 10 s | yes | repo power convention |
 | RESET = two OK holds within 5 s, second on a full-screen confirm page | v1.2/v1.5 | one accidental 500 ms hold wiped a pet on device 2026-10-11 |
 | Down/harmonic unlock levels | L1 up; L2 +down; L3 +harmonic | teaching order: build the ascending reference first, then direction sensitivity |
+| Treat rule | 1 per perfect quiz run, cap 9, feeding gives no XP | a mastery-tied reward loop, not a grind |
+| Mood scope | session RAM, decays past 30 s idle | no RTC: a stored mood would age wrongly across boots |
+| PLAY keys | OK/DOWN pet, UP feed, OK long back | all three keys act; the pill documents every binding |
 
 ## 11. Delivery Report Format
 
