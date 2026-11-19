@@ -105,6 +105,23 @@ int main(void)
     assert(tuner_note_cents(0.0f, &midi) == 0.0f && midi == -1);
     printf("tuner pitch: notes + cents ok\n");
 
+    // A4 calibration: frequencies and note naming follow the reference;
+    // the setter clamps and 440 restores the v1 defaults exactly.
+    tuner_pitch_set_a4(442);
+    assert(tuner_pitch_a4() == 442);
+    assert(fabsf(tuner_note_freq(69) - 442.0f) < 0.01f);
+    float c442 = tuner_note_cents(440.0f, &midi);
+    assert(midi == 69 && fabsf(c442 + 7.85f) < 0.1f);  // 440 is flat vs 442
+    assert(tuner_note_from_hz(442.0f) == 69);
+    tuner_pitch_set_a4(400);
+    assert(tuner_pitch_a4() == TUNER_A4_MIN);
+    tuner_pitch_set_a4(500);
+    assert(tuner_pitch_a4() == TUNER_A4_MAX);
+    tuner_pitch_set_a4(TUNER_A4_DEF);
+    assert(tuner_pitch_a4() == 440);
+    assert(fabsf(tuner_note_cents(440.0f, &midi)) < 0.5f);
+    printf("tuner pitch: a4 calibration ok\n");
+
     // median-3 smoothing.
     assert(tuner_pitch_median3(440.0f, 0.0f, 442.0f) == 440.0f);
     assert(tuner_pitch_median3(0.0f, 0.0f, 100.0f) == 0.0f);

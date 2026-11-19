@@ -20,6 +20,7 @@ typedef struct { int cmd; int16_t midi; uint16_t ms; } tuner_job_t;
 static QueueHandle_t s_job_q;
 static QueueHandle_t s_event_q;
 static TaskHandle_t s_task;
+static uint8_t s_vol = 80;
 
 // Render one triangle-wave note (integer synth: audible on the tiny
 // speaker, no float/FPU cost on the ESP32-C3). amp scales the ±512
@@ -108,7 +109,7 @@ esp_err_t tuner_audio_init(QueueHandle_t event_q) {
     if (bsp_audio_set_format(TUNER_PITCH_SR, 16, 1) != ESP_OK) {
         ESP_LOGE(TAG, "set_format 16k failed");
     }
-    bsp_audio_set_volume(80);
+    bsp_audio_set_volume(s_vol);
     s_job_q = xQueueCreate(2, sizeof(tuner_job_t));
     if (!s_job_q) return ESP_ERR_NO_MEM;
     if (xTaskCreate(audio_task, "tuner_audio", 6144, NULL, 4, &s_task)
@@ -118,6 +119,12 @@ esp_err_t tuner_audio_init(QueueHandle_t event_q) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+void tuner_audio_set_volume(uint8_t vol) {
+    if (vol > 100) vol = 100;
+    s_vol = vol;
+    bsp_audio_set_volume(vol);
 }
 
 void tuner_audio_cue(void) {

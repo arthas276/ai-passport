@@ -84,6 +84,10 @@ run_static_checks() {
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain         tests/test_tuner_modes.c main/tuner_modes.c         -o "${test_dir}/test_tuner_modes"
     "${test_dir}/test_tuner_modes"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_tuner_settings.c main/tuner_settings.c main/tuner_modes.c \
+        -o "${test_dir}/test_tuner_settings"
+    "${test_dir}/test_tuner_settings"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_demo_navigation.c main/demo_navigation.c \
         -o "${test_dir}/test_demo_navigation"
     "${test_dir}/test_demo_navigation"

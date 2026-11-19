@@ -131,10 +131,23 @@ float tuner_pitch_cents(float f0, float target_hz) {
     return 1200.0f * log2f(f0 / target_hz);
 }
 
-// Equal-tempered: midi = 69 + 12*log2(hz/440), rounded to nearest semitone.
+// Equal-tempered: midi = 69 + 12*log2(hz/a4), rounded to nearest semitone.
+static float s_a4 = 440.0f;
+
+void tuner_pitch_set_a4(uint16_t a4_hz) {
+    float a4 = (float)a4_hz;
+    if (a4 < (float)TUNER_A4_MIN) a4 = (float)TUNER_A4_MIN;
+    if (a4 > (float)TUNER_A4_MAX) a4 = (float)TUNER_A4_MAX;
+    s_a4 = a4;
+}
+
+uint16_t tuner_pitch_a4(void) {
+    return (uint16_t)(s_a4 + 0.5f);
+}
+
 int16_t tuner_note_from_hz(float hz) {
     if (hz <= 0.0f) return -1;
-    float midi = 69.0f + 12.0f * log2f(hz / 440.0f);
+    float midi = 69.0f + 12.0f * log2f(hz / s_a4);
     float rounded = floorf(midi + 0.5f);
     if (rounded < 21.0f) rounded = 21.0f;    // A0
     if (rounded > 108.0f) rounded = 108.0f;  // C8
@@ -162,5 +175,5 @@ const char *tuner_note_name(int16_t midi) {
 
 // Equal-tempered frequency of a MIDI note.
 float tuner_note_freq(int16_t midi) {
-    return 440.0f * exp2f((midi - 69) / 12.0f);
+    return s_a4 * exp2f((midi - 69) / 12.0f);
 }

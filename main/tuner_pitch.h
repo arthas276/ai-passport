@@ -18,3 +18,8 @@ float tuner_note_cents(float hz, int16_t *midi);
 const char *tuner_note_name(int16_t midi);
 // Equal-tempered frequency of a MIDI note.
 float tuner_note_freq(int16_t midi);
+// A4 reference calibration (clamped to TUNER_A4_MIN..MAX, default 440).
+// Affects note naming and note frequencies; cents between two notes are
+// unchanged (a uniform log-domain shift).
+void tuner_pitch_set_a4(uint16_t a4_hz);
+uint16_t tuner_pitch_a4(void);

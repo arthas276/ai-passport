@@ -4,13 +4,16 @@
 #include <string.h>
 #include "tuner.h"
 #include "tuner_modes.h"
+#include "tuner_settings.h"
+#include "tuner_strings.h"
 
 int main(void)
 {
-    // Mode set and cycle order.
+    // Mode set and cycle order (names are the generated Chinese labels).
     assert(TUNER_MODE_COUNT == 5);
-    assert(strcmp(tuner_mode_name(TUNER_MODE_CHROMATIC), "CHROMATIC") == 0);
-    assert(strcmp(tuner_mode_name(TUNER_MODE_VOICE), "VOICE") == 0);
+    assert(strcmp(tuner_mode_name(TUNER_MODE_CHROMATIC),
+                  STR_MODE_CHROMATIC) == 0);
+    assert(strcmp(tuner_mode_name(TUNER_MODE_VOICE), STR_MODE_VOICE) == 0);
     assert(tuner_mode_next(TUNER_MODE_CHROMATIC) == TUNER_MODE_GUITAR);
     assert(tuner_mode_next(TUNER_MODE_GUITAR) == TUNER_MODE_UKULELE);
     assert(tuner_mode_next(TUNER_MODE_VOICE) == TUNER_MODE_CHROMATIC);
@@ -59,6 +62,46 @@ int main(void)
     tuner_strings_step(&s, TUNER_MODE_CHROMATIC, 1);
     assert(s.index == 0);
     printf("modes: strings stepper ok\n");
+
+    // String progress mask: advance marks the string left behind, manual
+    // stepping keeps it, reset clears, all_done needs every bit.
+    tuner_strings_reset(&s);
+    assert(s.done_mask == 0);
+    assert(!tuner_strings_all_done(&s, TUNER_MODE_GUITAR));
+    tuner_strings_advance(&s, TUNER_MODE_GUITAR);
+    assert(s.done_mask == 0x01 && s.index == 1);
+    tuner_strings_step(&s, TUNER_MODE_GUITAR, 1);
+    assert(s.done_mask == 0x01);                  // step keeps done bits
+    tuner_strings_reset(&s);
+    for (int i = 0; i < 6; i++) tuner_strings_advance(&s, TUNER_MODE_GUITAR);
+    assert(s.done_mask == 0x3F);
+    assert(tuner_strings_all_done(&s, TUNER_MODE_GUITAR));
+    tuner_strings_step(&s, TUNER_MODE_GUITAR, 1);
+    assert(tuner_strings_all_done(&s, TUNER_MODE_GUITAR));
+    tuner_strings_reset(&s);
+    for (int i = 0; i < 3; i++) tuner_strings_advance(&s, TUNER_MODE_UKULELE);
+    assert(s.done_mask == 0x07);
+    assert(!tuner_strings_all_done(&s, TUNER_MODE_UKULELE));
+    tuner_strings_advance(&s, TUNER_MODE_UKULELE);
+    assert(tuner_strings_all_done(&s, TUNER_MODE_UKULELE));
+    tuner_strings_reset(&s);
+    assert(!tuner_strings_all_done(&s, TUNER_MODE_CHROMATIC));
+    printf("modes: string progress ok\n");
+
+    // Transpose display: written = sounding + offset, clamped to 21..108.
+    assert(tuner_transpose_midi(60, TUNER_TP_BB) == 62);
+    assert(tuner_transpose_midi(60, TUNER_TP_EB) == 69);
+    assert(tuner_transpose_midi(60, TUNER_TP_F) == 67);
+    assert(tuner_transpose_midi(100, TUNER_TP_EB) == 108);
+    assert(tuner_transpose_midi(15, TUNER_TP_OFF) == 21);   // clamped low
+    assert(tuner_transpose_midi(-1, TUNER_TP_BB) == -1);
+
+    // Needle EMA: halves the gap at 0.5, approaches the target monotonic.
+    assert(tuner_ema(0.0f, 10.0f, 0.5f) == 5.0f);
+    float v = 0.0f;
+    for (int i = 0; i < 8; i++) v = tuner_ema(v, 10.0f, 0.35f);
+    assert(v > 5.0f && v < 10.0f);
+    printf("modes: transpose + ema ok\n");
 
     // Voice-range tracker.
     tuner_range_t r;

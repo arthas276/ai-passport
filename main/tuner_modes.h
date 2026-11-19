@@ -23,15 +23,23 @@ int16_t tuner_mode_string_midi(tuner_mode_t mode, int index);  // index in [0, c
 // Step a mode index with wraparound (for OK-long cycling).
 tuner_mode_t tuner_mode_next(tuner_mode_t mode);
 
-// String stepper state for instrument modes (UI-owned).
+// String stepper state for instrument modes (UI-owned). done_mask bit i
+// is set once string i has locked in-tune this pass; it survives manual
+// stepping and clears only on reset (mode change / re-entry).
 typedef struct {
     int index;      // current string index within the mode
     bool locked;    // current string has locked in-tune once
+    uint8_t done_mask;
 } tuner_strings_t;
 
 void tuner_strings_reset(tuner_strings_t *s);            // to string 0
 void tuner_strings_step(tuner_strings_t *s, tuner_mode_t mode, int delta);
 void tuner_strings_advance(tuner_strings_t *s, tuner_mode_t mode);  // after lock
+bool tuner_strings_all_done(const tuner_strings_t *s, tuner_mode_t mode);
+
+// Written-pitch display for transposing instruments: shift a sounding MIDI
+// note by semis (0/2/7/9), clamped into the named range 21..108.
+int16_t tuner_transpose_midi(int16_t midi, int semis);
 
 // Voice-range tracker: remembers the lowest/highest sustained note of the
 // session. update() feeds every voiced frame's nearest MIDI note.

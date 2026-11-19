@@ -1,5 +1,6 @@
 // tuner_modes.c - mode tables and small steppers. PURE C.
 #include "tuner_modes.h"
+#include "tuner_strings.h"
 
 // String tunings, low to high in playing order; ukulele is reentrant
 // (4th string G4 above C4). Bass is intentionally absent: its low E1
@@ -11,7 +12,8 @@ static const int16_t STRINGS[TUNER_MODE_COUNT][6] = {
 };
 
 static const char *MODE_NAMES[TUNER_MODE_COUNT] = {
-    "CHROMATIC", "GUITAR", "UKULELE", "VIOLIN", "VOICE",
+    STR_MODE_CHROMATIC, STR_MODE_GUITAR, STR_MODE_UKULELE,
+    STR_MODE_VIOLIN, STR_MODE_VOICE,
 };
 
 const char *tuner_mode_name(tuner_mode_t mode) {
@@ -41,6 +43,7 @@ tuner_mode_t tuner_mode_next(tuner_mode_t mode) {
 void tuner_strings_reset(tuner_strings_t *s) {
     s->index = 0;
     s->locked = false;
+    s->done_mask = 0;
 }
 
 void tuner_strings_step(tuner_strings_t *s, tuner_mode_t mode, int delta) {
@@ -53,8 +56,23 @@ void tuner_strings_step(tuner_strings_t *s, tuner_mode_t mode, int delta) {
 void tuner_strings_advance(tuner_strings_t *s, tuner_mode_t mode) {
     int count = tuner_mode_string_count(mode);
     if (count == 0) return;
+    s->done_mask |= (uint8_t)(1u << s->index);
     s->index = (s->index + 1) % count;
     s->locked = false;
+}
+
+bool tuner_strings_all_done(const tuner_strings_t *s, tuner_mode_t mode) {
+    int count = tuner_mode_string_count(mode);
+    if (count == 0) return false;
+    return s->done_mask == (uint8_t)((1u << count) - 1u);
+}
+
+int16_t tuner_transpose_midi(int16_t midi, int semis) {
+    if (midi < 0) return -1;
+    int16_t m = (int16_t)(midi + semis);
+    if (m < 21) m = 21;
+    if (m > 108) m = 108;
+    return m;
 }
 
 void tuner_range_reset(tuner_range_t *r) {

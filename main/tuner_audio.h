@@ -25,6 +25,10 @@ esp_err_t tuner_audio_init(QueueHandle_t event_q);
 // Play the lock chime (queues; capture pauses until TUNER_EV_CUE_DONE).
 void tuner_audio_cue(void);
 
+// Set the speaker volume (0..100, clamped); applies immediately to the
+// bsp output and is used by every later cue/tone.
+void tuner_audio_set_volume(uint8_t vol);
+
 // Play a sustained reference tone for a note (queues; capture pauses
 // until the next TUNER_EV_CUE_DONE). v1.2: instrument modes hold UP to
 // hear the current target string.

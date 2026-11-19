@@ -7,6 +7,9 @@
 #include "bsp_pins.h"
 #include "tuner_ui.h"
 #include "tuner_audio.h"
+#include "tuner_settings.h"
+#include "tuner_store.h"
+#include "tuner_pitch.h"
 #include "key_guard.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -96,6 +99,16 @@ void app_main(void) {
 
     bsp_i2c_init();
 
+    // Settings first: A4 calibration and volume apply before any tone is
+    // played and the UI boots straight into the remembered mode.
+    tuner_settings_t set;
+    esp_err_t serr = tuner_store_load(&set);
+    if (serr != ESP_OK) {
+        ESP_LOGW(TAG, "settings load: %s (defaults in use)",
+                 esp_err_to_name(serr));
+    }
+    tuner_pitch_set_a4(set.a4);
+
     // Battery gauge (CW2017, I2C 0x63) is optional hardware: on init failure
     // bsp_battery_soc() keeps returning -1 and the header shows "--%".
     if (bsp_battery_init() != ESP_OK) {
@@ -135,6 +148,7 @@ void app_main(void) {
         ESP_LOGE(TAG, "audio worker init failed (tuner unavailable)");
         return;
     }
+    tuner_audio_set_volume(set.vol);
 
     if (bsp_button_init(on_key, NULL) != ESP_OK) {
         ESP_LOGE(TAG, "button init failed");
@@ -150,7 +164,7 @@ void app_main(void) {
     }
 
     if (bsp_lvgl_lock(1000)) {
-        tuner_ui_init(s_key_q);
+        tuner_ui_init(s_key_q, &set);
         bsp_lvgl_unlock();
         s_input_ready = true;
     }
