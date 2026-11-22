@@ -14,6 +14,9 @@ typedef struct {
     uint32_t minutes;    // lifetime guided minutes
     uint32_t cycles;     // lifetime completed breath cycles
     uint32_t milestone;  // next lifetime-minute threshold to celebrate (v1.2)
+    uint32_t mode_minutes[7];  // per-pattern guided minutes (v1.4 STATS)
+    uint8_t  last_mode;  // pattern index of the last completed session (v1.4)
+    uint32_t last_min;   // guided minutes of the last completed session (v1.4)
 } breath_save_t;
 
 // Load with defaults on first boot / missing keys; failures degrade to

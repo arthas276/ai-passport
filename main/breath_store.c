@@ -18,6 +18,9 @@ void breath_store_load(breath_save_t *out) {
     out->minutes = 0;
     out->cycles = 0;
     out->milestone = 10;
+    for (int i = 0; i < 7; i++) out->mode_minutes[i] = 0;   // v1.4
+    out->last_mode = 0;
+    out->last_min = 0;
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
         return;   // first boot or partition issue: fresh stats
@@ -46,6 +49,13 @@ void breath_store_load(breath_save_t *out) {
     if (nvs_get_u32(h, "min", &cnt) == ESP_OK) out->minutes = cnt;
     if (nvs_get_u32(h, "cyc", &cnt) == ESP_OK) out->cycles = cnt;
     if (nvs_get_u32(h, "ms", &cnt) == ESP_OK && cnt > 0) out->milestone = cnt;
+    char key[3] = "m0";
+    for (int i = 0; i < 7; i++) {              // v1.4 per-pattern minutes
+        key[1] = (char)('0' + i);
+        if (nvs_get_u32(h, key, &cnt) == ESP_OK) out->mode_minutes[i] = cnt;
+    }
+    if (nvs_get_u8(h, "lm", &v) == ESP_OK && v < 7u) out->last_mode = v;
+    if (nvs_get_u32(h, "lp", &cnt) == ESP_OK) out->last_min = cnt;
     nvs_close(h);
 }
 
@@ -63,6 +73,13 @@ void breath_store_save(const breath_save_t *s) {
     nvs_set_u32(h, "min", s->minutes);
     nvs_set_u32(h, "cyc", s->cycles);
     nvs_set_u32(h, "ms", s->milestone);
+    char key[3] = "m0";
+    for (int i = 0; i < 7; i++) {              // v1.4 per-pattern minutes
+        key[1] = (char)('0' + i);
+        nvs_set_u32(h, key, s->mode_minutes[i]);
+    }
+    nvs_set_u8(h, "lm", s->last_mode);
+    nvs_set_u32(h, "lp", s->last_min);
     nvs_commit(h);
     nvs_close(h);
 }

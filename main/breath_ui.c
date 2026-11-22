@@ -1,39 +1,51 @@
 // breath_ui.c - LVGL screens for BREATHE: HOME / VOLUME / SESSION / SUMMARY.
 //
-// Redesigned application UI (mandatory-ui-redesign rule): own dark-teal
-// palette, own screens and navigation - none of the baseline demo shell.
+// Redesigned application UI (mandatory-ui-redesign rule): family night-navy
+// base with the app's teal accent (v1.4), own screens and navigation -
+// none of the baseline demo shell.
 // Built only from lv_obj + labels, the widget set already proven to build
 // in this repository. All handlers run on the single input task under
 // bsp_lvgl_lock; the only timer is main.c's 1 Hz tick, which arrives as an
 // app event so no LVGL access happens from timer callbacks.
 #include "breath_ui.h"
 #include "breath_store.h"
+#include "breath_strings.h"   // v1.4 generated Chinese UI strings
 #include "bsp_battery.h"
 #include "bsp_display.h"
 #include "lvgl.h"
 #include <stdio.h>
 
-// Palette: deep green-black night canvas, teal accent (own scheme).
-#define C_BG     0x0F1F1A
-#define C_CARD   0x1C332B
-#define C_INK    0xEDE8DC
-#define C_DIM    0x8FA79E
+LV_FONT_DECLARE(breath_font_20);
+
+// Palette: family night-navy baseline (same base as EAR/OTP/TUNER), with
+// the app's teal kept as its identity accent (v1.4).
+#define C_BG     0x1B263B
+#define C_CARD   0x24344D
+#define C_INK    0xEDEFF3
+#define C_DIM    0x8D99AE
 #define C_ACCENT 0x53D3B5
-#define C_TRACK  0x2A463C
+#define C_TRACK  0x3A4C6E
 
 // Session orb diameter range (px) mapped to phase progress.
 #define ORB_MIN 60
 #define ORB_MAX 160
 #define HOME_ROWS (BREATH_PATTERN_COUNT + 1)   // patterns + SETUP row
 #define SETUP_ROW (BREATH_PATTERN_COUNT)
-#define SETTINGS_ROWS 4u   // DURATION / GLOW / VOLUME / YOURS (v1.3)
+#define SETTINGS_ROWS 5u   // DURATION / GLOW / VOLUME / YOURS / STATS (v1.4)
 #define EDIT_ROWS 4u       // IN / HOLD / OUT / HOLD2 (v1.3)
+
+// v1.4 Chinese display names (the engine table keeps ASCII labels).
+static const char *const MODE_ZH[BREATH_PATTERN_COUNT] = {
+    STR_MODE_FLOW, STR_MODE_CALM, STR_MODE_SIGH, STR_MODE_BOX,
+    STR_MODE_SLEEP, STR_MODE_WAKE, STR_MODE_YOURS,
+};
 
 #define GLOW_LEVELS 3u
 static const uint8_t GLOW_PCT[GLOW_LEVELS] = { 100u, 12u, 0u };
 static const char *const GLOW_NAMES[GLOW_LEVELS] =
-    { "BRIGHT", "NIGHT", "DARK" };
-static const char *const DUR_NAMES[4] = { "FREE", "1 MIN", "3 MIN", "5 MIN" };
+    { STR_GLOW_BRIGHT, STR_GLOW_NIGHT, STR_GLOW_DARK };
+static const char *const DUR_NAMES[4] =
+    { STR_DUR_FREE, "1 " STR_UNIT_MIN, "3 " STR_UNIT_MIN, "5 " STR_UNIT_MIN };
 static const uint8_t DUR_VALUES[4] = { 0u, 1u, 3u, 5u };
 
 static uint8_t dur_index(uint8_t dur_min) {
@@ -48,7 +60,7 @@ static uint8_t dur_next(uint8_t dur_min) {
 }
 
 typedef enum { SCR_HOME = 0, SCR_SETTINGS, SCR_VOLUME, SCR_EDIT,
-               SCR_SESSION, SCR_SUMMARY } screen_id_t;
+               SCR_SESSION, SCR_SUMMARY, SCR_STATS } screen_id_t;
 
 static screen_id_t s_scr_id;
 static lv_obj_t *s_scr;
@@ -74,6 +86,7 @@ static lv_obj_t *s_set_pill;
 static lv_obj_t *s_edit_cards[EDIT_ROWS], *s_edit_subs[EDIT_ROWS];
 static lv_obj_t *s_edit_pill;
 static lv_obj_t *s_vol_val, *s_vol_ind, *s_vol_pill, *s_sum_pill;
+static lv_obj_t *s_stats_last, *s_stats_pill;          // v1.4 STATS screen
 static lv_obj_t *s_phase, *s_orb, *s_ring, *s_count, *s_cyc, *s_clock;
 
 static void refresh_battery(void) {
@@ -99,9 +112,9 @@ static lv_obj_t *screen_create(void) {
     return s_scr;
 }
 
-static void header(lv_obj_t *scr, const char *title) {
+static void header(lv_obj_t *scr, const char *title, bool zh) {
     lv_obj_t *t = lv_label_create(scr);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(t, zh ? &breath_font_20 : &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(t, lv_color_hex(C_INK), 0);
     lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 10);
     lv_label_set_text(t, title);
@@ -119,6 +132,7 @@ static void enter_volume(void);
 static void enter_edit(void);
 static void enter_session(void);
 static void enter_summary(void);
+static void enter_stats(void);
 
 // v1.3: live sub text for the YOURS row ("5 + 5" / "4 + 2 + 6 + 2").
 // A static buffer so the engine's copied pattern keeps a stable pointer.
@@ -156,7 +170,8 @@ static void apply_custom(void) {
     breath_engine_set_custom(&p);   // store bounds make this always true
 }
 
-// Bottom hint pill: 232x34 rounded bar, one centered montserrat_14 line.
+// Bottom hint pill: 232x34 rounded bar, one centered breath_font_20
+// line (v1.4 Chinese hints; widths frozen by tests/test_hint_budget.py).
 // Every line must stay inside the 204 px text budget; tests/
 // test_hint_budget.py freezes the font advance table and re-measures each
 // hint_pill_set line against it.
@@ -173,7 +188,7 @@ static lv_obj_t *hint_pill_create(lv_obj_t *parent) {
     lv_obj_remove_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t *label = lv_label_create(pill);
     lv_obj_remove_style_all(label);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label, &breath_font_20, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(C_DIM), 0);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(label, 216);
@@ -196,11 +211,11 @@ static void refresh_home(void) {
         lv_obj_set_style_border_width(s_cards[i], sel ? 2 : 0, 0);
         lv_obj_set_style_border_color(s_cards[i], lv_color_hex(C_ACCENT), 0);
     }
-    char sub[24];
-    snprintf(sub, sizeof(sub), "%s - %s", DUR_NAMES[dur_index(s_save.dur_min)],
+    char sub[48];
+    snprintf(sub, sizeof(sub), "%s %s", DUR_NAMES[dur_index(s_save.dur_min)],
              GLOW_NAMES[s_save.glow]);
     lv_label_set_text(s_subs[SETUP_ROW],
-                      s_save.dur_min || s_save.glow ? sub : "FREE");
+                      s_save.dur_min || s_save.glow ? sub : STR_DUR_FREE);
     // YOURS shows the live custom summary, not the engine default copy.
     lv_label_set_text(s_subs[BREATH_PATTERN_CUSTOM], s_custom_sub);
     lv_label_set_text_fmt(s_stats, "%lu min  -  %lu cycles",
@@ -211,7 +226,7 @@ static void refresh_home(void) {
 static void enter_home(void) {
     s_scr_id = SCR_HOME;
     lv_obj_t *scr = screen_create();
-    header(scr, "BREATHE");
+    header(scr, "BREATHE", false);
 
     // v1.3: 8 rows (7 patterns + SETUP) at a 33 px pitch in 30 px cards;
     // montserrat_20 (line height 23) fits the 24 px inner band with pad 3.
@@ -227,14 +242,18 @@ static void enter_home(void) {
         lv_obj_remove_flag(s_cards[i], LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *primary = lv_label_create(s_cards[i]);
-        lv_obj_set_style_text_font(primary, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(primary, &breath_font_20, 0);
         lv_obj_set_style_text_color(primary, lv_color_hex(C_INK), 0);
         lv_obj_align(primary, LV_ALIGN_LEFT_MID, 4, 0);
         lv_label_set_text(primary, i < BREATH_PATTERN_COUNT
-                                   ? BREATH_PATTERNS[i].label : "SETUP");
+                                   ? MODE_ZH[i] : STR_SETUP);
 
         s_subs[i] = lv_label_create(s_cards[i]);
-        lv_obj_set_style_text_font(s_subs[i], &lv_font_montserrat_14, 0);
+        // v1.4: numeric pattern subs stay on Montserrat 14; the SETUP row
+        // carries Chinese setting values and uses the WenKai subset.
+        lv_obj_set_style_text_font(s_subs[i],
+                                   i == SETUP_ROW ? &breath_font_20
+                                                  : &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(s_subs[i], lv_color_hex(C_DIM), 0);
         lv_obj_align(s_subs[i], LV_ALIGN_RIGHT_MID, -4, 0);
         lv_label_set_text(s_subs[i], i < BREATH_PATTERN_COUNT
@@ -264,20 +283,21 @@ static void refresh_settings(void) {
     lv_label_set_text(s_set_subs[1], GLOW_NAMES[s_save.glow]);
     lv_label_set_text_fmt(s_set_subs[2], "%u%%", s_save.vol);
     lv_label_set_text(s_set_subs[3], s_custom_sub);
+    lv_label_set_text(s_set_subs[4], "");   // STATS row has no live value
 }
 
 static void enter_settings(void) {
     s_scr_id = SCR_SETTINGS;
     lv_obj_t *scr = screen_create();
-    header(scr, "SETUP");
+    header(scr, STR_SETUP, true);
 
     static const char *const NAMES[SETTINGS_ROWS] =
-        { "DURATION", "GLOW", "VOLUME", "YOURS" };
+        { STR_SET_DUR, STR_SET_GLOW, STR_SET_VOL, STR_MODE_YOURS, STR_SET_STATS };
     for (uint8_t i = 0; i < SETTINGS_ROWS; i++) {
-        int y = 56 + (int)i * 50;
+        int y = 52 + (int)i * 44;
         s_set_cards[i] = lv_obj_create(scr);
         lv_obj_set_pos(s_set_cards[i], 16, y);
-        lv_obj_set_size(s_set_cards[i], 208, 44);
+        lv_obj_set_size(s_set_cards[i], 208, 40);
         lv_obj_set_style_radius(s_set_cards[i], 10, 0);
         lv_obj_set_style_bg_color(s_set_cards[i], lv_color_hex(C_CARD), 0);
         lv_obj_set_style_border_width(s_set_cards[i], 0, 0);
@@ -285,20 +305,24 @@ static void enter_settings(void) {
         lv_obj_remove_flag(s_set_cards[i], LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *primary = lv_label_create(s_set_cards[i]);
-        lv_obj_set_style_text_font(primary, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(primary, &breath_font_20, 0);
         lv_obj_set_style_text_color(primary, lv_color_hex(C_INK), 0);
         lv_obj_align(primary, LV_ALIGN_LEFT_MID, 4, 0);
         lv_label_set_text(primary, NAMES[i]);
 
         s_set_subs[i] = lv_label_create(s_set_cards[i]);
-        lv_obj_set_style_text_font(s_set_subs[i], &lv_font_montserrat_14, 0);
+        // v1.4: DURATION/GLOW values are Chinese (WenKai); VOLUME "70%" and
+        // the YOURS numeric summary stay on Montserrat.
+        lv_obj_set_style_text_font(s_set_subs[i],
+                                   (i == 0u || i == 1u) ? &breath_font_20
+                                                        : &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(s_set_subs[i], lv_color_hex(C_DIM), 0);
         lv_obj_align(s_set_subs[i], LV_ALIGN_RIGHT_MID, -4, 0);
         lv_label_set_text(s_set_subs[i], "");
     }
 
     s_set_pill = hint_pill_create(scr);
-    hint_pill_set(s_set_pill, "OK: SET   OK LONG: BACK");
+    hint_pill_set(s_set_pill, STR_HINT_SET);
     refresh_settings();
 }
 
@@ -313,11 +337,10 @@ static void refresh_edit(void) {
         bool sel = i == s_edit_sel;
         lv_obj_set_style_border_width(s_edit_cards[i], sel ? 2 : 0, 0);
         lv_obj_set_style_border_color(s_edit_cards[i], lv_color_hex(C_ACCENT), 0);
-        lv_label_set_text_fmt(s_edit_subs[i], "%u s", s_edit[i]);
+        lv_label_set_text_fmt(s_edit_subs[i], "%u " STR_UNIT_SEC, s_edit[i]);
     }
     hint_pill_set(s_edit_pill, s_edit_sel < EDIT_ROWS - 1u
-                                  ? "UP/DOWN: SEC  OK: NEXT"
-                                  : "OK: SAVE  LONG: CANCEL");
+                                  ? STR_HINT_EDIT : STR_HINT_SAVE);
 }
 
 static void enter_edit(void) {
@@ -328,9 +351,10 @@ static void enter_edit(void) {
     s_edit[2] = s_save.c_out;
     s_edit[3] = s_save.c_hold2;
     lv_obj_t *scr = screen_create();
-    header(scr, "YOURS");
+    header(scr, STR_MODE_YOURS, true);
 
-    static const char *const NAMES[EDIT_ROWS] = { "IN", "HOLD", "OUT", "HOLD2" };
+    static const char *const NAMES[EDIT_ROWS] =
+        { STR_EDIT_IN, STR_EDIT_HOLD, STR_EDIT_OUT, STR_EDIT_HOLD2 };
     for (uint8_t i = 0; i < EDIT_ROWS; i++) {
         int y = 48 + (int)i * 56;
         s_edit_cards[i] = lv_obj_create(scr);
@@ -343,13 +367,13 @@ static void enter_edit(void) {
         lv_obj_remove_flag(s_edit_cards[i], LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *primary = lv_label_create(s_edit_cards[i]);
-        lv_obj_set_style_text_font(primary, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(primary, &breath_font_20, 0);
         lv_obj_set_style_text_color(primary, lv_color_hex(C_INK), 0);
         lv_obj_align(primary, LV_ALIGN_LEFT_MID, 4, 0);
         lv_label_set_text(primary, NAMES[i]);
 
         s_edit_subs[i] = lv_label_create(s_edit_cards[i]);
-        lv_obj_set_style_text_font(s_edit_subs[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(s_edit_subs[i], &breath_font_20, 0);
         lv_obj_set_style_text_color(s_edit_subs[i], lv_color_hex(C_DIM), 0);
         lv_obj_align(s_edit_subs[i], LV_ALIGN_RIGHT_MID, -4, 0);
         lv_label_set_text(s_edit_subs[i], "");
@@ -371,7 +395,7 @@ static void enter_volume(void) {
     s_scr_id = SCR_VOLUME;
     s_vol = s_save.vol;
     lv_obj_t *scr = screen_create();
-    header(scr, "VOLUME");
+    header(scr, STR_SET_VOL, true);
 
     s_vol_val = lv_label_create(scr);
     lv_obj_set_style_text_font(s_vol_val, &lv_font_montserrat_48, 0);
@@ -397,7 +421,7 @@ static void enter_volume(void) {
     lv_obj_remove_flag(s_vol_ind, LV_OBJ_FLAG_SCROLLABLE);
 
     s_vol_pill = hint_pill_create(scr);
-    hint_pill_set(s_vol_pill, "UP/DOWN: SET   OK: BACK");
+    hint_pill_set(s_vol_pill, STR_HINT_VOL);
     refresh_volume();
 }
 
@@ -406,12 +430,12 @@ static void enter_volume(void) {
 // ---------------------------------------------------------------------------
 static const char *phase_word(breath_phase_t ph) {
     switch (ph) {
-    case BREATH_PHASE_READY:   return "GET READY";
-    case BREATH_PHASE_INHALE:  return "BREATHE IN";
-    case BREATH_PHASE_HOLD:    return "HOLD";
-    case BREATH_PHASE_INHALE2: return "TOP UP";
-    case BREATH_PHASE_EXHALE:  return "BREATHE OUT";
-    default:                   return "HOLD";
+    case BREATH_PHASE_READY:   return STR_PHASE_READY;
+    case BREATH_PHASE_INHALE:  return STR_EDIT_IN;
+    case BREATH_PHASE_HOLD:    return STR_EDIT_HOLD;
+    case BREATH_PHASE_INHALE2: return STR_PHASE_TOPUP;
+    case BREATH_PHASE_EXHALE:  return STR_EDIT_OUT;
+    default:                   return STR_EDIT_HOLD;
     }
 }
 
@@ -432,7 +456,7 @@ static void update_session(const breath_state_t *st) {
     lv_obj_align(s_orb, LV_ALIGN_CENTER, 0, 6);
 
     lv_label_set_text_fmt(s_count, "%u", (st->phase_left_ms + 999u) / 1000u);
-    lv_label_set_text_fmt(s_cyc, "C %lu", (unsigned long)st->cycle);
+    lv_label_set_text_fmt(s_cyc, "%lu " STR_SESSION_CYC, (unsigned long)st->cycle);
     if (s_dur) {
         uint32_t left = (uint32_t)s_dur * 60000u + BREATH_READY_MS;
         left = st->elapsed_ms >= left ? 0u : left - st->elapsed_ms;
@@ -454,10 +478,10 @@ static void enter_session(void) {
     s_dimmed = false;
 
     lv_obj_t *hint = lv_label_create(scr);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(hint, &breath_font_20, 0);
     lv_obj_set_style_text_color(hint, lv_color_hex(C_DIM), 0);
-    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 10, 14);
-    lv_label_set_text(hint, "OK LONG: END");
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 10, 10);
+    lv_label_set_text(hint, STR_SESSION_END);
 
     s_batt = lv_label_create(scr);
     lv_obj_set_style_text_font(s_batt, &lv_font_montserrat_14, 0);
@@ -466,10 +490,10 @@ static void enter_session(void) {
     refresh_battery();
 
     s_phase = lv_label_create(scr);
-    lv_obj_set_style_text_font(s_phase, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_phase, &breath_font_20, 0);
     lv_obj_set_style_text_color(s_phase, lv_color_hex(C_INK), 0);
-    lv_obj_align(s_phase, LV_ALIGN_TOP_MID, 0, 44);
-    lv_label_set_text(s_phase, "GET READY");
+    lv_obj_align(s_phase, LV_ALIGN_TOP_MID, 0, 46);
+    lv_label_set_text(s_phase, STR_PHASE_READY);
 
     // Static rest ring; the growing/shrinking orb inside carries progress.
     s_ring = lv_obj_create(scr);
@@ -496,10 +520,10 @@ static void enter_session(void) {
     lv_label_set_text(s_count, "3");
 
     s_cyc = lv_label_create(scr);
-    lv_obj_set_style_text_font(s_cyc, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_cyc, &breath_font_20, 0);
     lv_obj_set_style_text_color(s_cyc, lv_color_hex(C_DIM), 0);
-    lv_obj_align(s_cyc, LV_ALIGN_BOTTOM_LEFT, 14, -12);
-    lv_label_set_text(s_cyc, "C 0");
+    lv_obj_align(s_cyc, LV_ALIGN_BOTTOM_LEFT, 14, -10);
+    lv_label_set_text(s_cyc, "0 " STR_SESSION_CYC);
 
     s_clock = lv_label_create(scr);
     lv_obj_set_style_text_font(s_clock, &lv_font_montserrat_14, 0);
@@ -520,7 +544,7 @@ static void enter_summary(void) {
     lv_obj_t *scr = screen_create();
     bsp_display_backlight(100);   // DARK sessions end on a readable page
     s_dimmed = false;
-    header(scr, "SESSION DONE");
+    header(scr, STR_SUM_TITLE, true);
 
     lv_obj_t *big = lv_label_create(scr);
     lv_obj_set_style_text_font(big, &lv_font_montserrat_48, 0);
@@ -529,15 +553,15 @@ static void enter_summary(void) {
     lv_label_set_text_fmt(big, "%lu", (unsigned long)s_sum_cycles);
 
     lv_obj_t *unit = lv_label_create(scr);
-    lv_obj_set_style_text_font(unit, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(unit, &breath_font_20, 0);
     lv_obj_set_style_text_color(unit, lv_color_hex(C_DIM), 0);
     lv_obj_align(unit, LV_ALIGN_TOP_MID, 0, 112);
-    lv_label_set_text(unit, "CYCLES");
+    lv_label_set_text(unit, STR_SUM_CYC_UNIT);
 
     lv_obj_t *time = lv_label_create(scr);
     lv_obj_set_style_text_font(time, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(time, lv_color_hex(C_INK), 0);
-    lv_obj_align(time, LV_ALIGN_TOP_MID, 0, 140);
+    lv_obj_align(time, LV_ALIGN_TOP_MID, 0, 142);
     lv_label_set_text_fmt(time, "%lu:%02lu",
                           (unsigned long)(s_sum_ms / 60000u),
                           (unsigned long)(s_sum_ms / 1000u % 60u));
@@ -557,35 +581,75 @@ static void enter_summary(void) {
     }
 
     lv_obj_t *tot = lv_label_create(scr);
-    lv_obj_set_style_text_font(tot, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(tot, &breath_font_20, 0);
     lv_obj_set_style_text_color(tot, lv_color_hex(C_DIM), 0);
-    lv_obj_align(tot, LV_ALIGN_TOP_MID, 0, 194);
-    lv_label_set_text_fmt(tot, "TOTAL %lu MIN  -  %lu CYC",
+    lv_obj_align(tot, LV_ALIGN_TOP_MID, 0, 190);
+    lv_label_set_text_fmt(tot, STR_SUM_TOTAL " %lu " STR_UNIT_MIN " · %lu "
+                          STR_UNIT_TIMES,
                           (unsigned long)s_save.minutes,
-                          (unsigned long)s_save.cycles);
-
-    lv_obj_t *ses = lv_label_create(scr);
-    lv_obj_set_style_text_font(ses, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(ses, lv_color_hex(C_DIM), 0);
-    lv_obj_align(ses, LV_ALIGN_TOP_MID, 0, 216);
-    lv_label_set_text_fmt(ses, "%lu SESSIONS", (unsigned long)s_save.sessions);
+                          (unsigned long)s_save.sessions);
 
     if (s_milestone_hit) {
-        lv_obj_t *ms_label = lv_label_create(scr);
-        lv_obj_set_style_text_font(ms_label, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(ms_label, lv_color_hex(C_ACCENT), 0);
-        lv_obj_align(ms_label, LV_ALIGN_TOP_MID, 0, 232);
-        lv_label_set_text(ms_label, "MILESTONE");
-
         lv_obj_t *ms_val = lv_label_create(scr);
-        lv_obj_set_style_text_font(ms_val, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(ms_val, &breath_font_20, 0);
         lv_obj_set_style_text_color(ms_val, lv_color_hex(C_ACCENT), 0);
-        lv_obj_align(ms_val, LV_ALIGN_TOP_MID, 0, 250);
-        lv_label_set_text_fmt(ms_val, "%lu MIN", (unsigned long)s_milestone_min);
+        lv_obj_align(ms_val, LV_ALIGN_TOP_MID, 0, 224);
+        lv_label_set_text_fmt(ms_val, STR_SUM_MILESTONE " %lu " STR_UNIT_MIN,
+                              (unsigned long)s_milestone_min);
     }
 
     s_sum_pill = hint_pill_create(scr);
-    hint_pill_set(s_sum_pill, "OK: HOME");
+    hint_pill_set(s_sum_pill, STR_HINT_OKHOME);
+}
+
+// ---------------------------------------------------------------------------
+// STATS (v1.4): read-only per-pattern overview - the last session line plus
+// seven mode rows of guided minutes; reached from the SETUP row 5.
+// ---------------------------------------------------------------------------
+static void enter_stats(void) {
+    s_scr_id = SCR_STATS;
+    lv_obj_t *scr = screen_create();
+    header(scr, STR_SET_STATS, true);
+
+    s_stats_last = lv_label_create(scr);
+    lv_obj_set_style_text_font(s_stats_last, &breath_font_20, 0);
+    lv_obj_set_style_text_color(s_stats_last, lv_color_hex(C_DIM), 0);
+    lv_obj_align(s_stats_last, LV_ALIGN_TOP_MID, 0, 42);
+    if (s_save.sessions == 0u) {
+        lv_label_set_text(s_stats_last, STR_STATS_EMPTY);
+    } else {
+        lv_label_set_text_fmt(s_stats_last,
+                              STR_STATS_LAST " %s %lu " STR_UNIT_MIN,
+                              MODE_ZH[s_save.last_mode % BREATH_PATTERN_COUNT],
+                              (unsigned long)s_save.last_min);
+    }
+
+    for (uint8_t i = 0; i < BREATH_PATTERN_COUNT; i++) {
+        lv_obj_t *row = lv_obj_create(scr);
+        lv_obj_set_pos(row, 16, 76 + (int)i * 28);
+        lv_obj_set_size(row, 208, 26);
+        lv_obj_set_style_radius(row, 8, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(C_CARD), 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_pad_all(row, 2, 0);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *name = lv_label_create(row);
+        lv_obj_set_style_text_font(name, &breath_font_20, 0);
+        lv_obj_set_style_text_color(name, lv_color_hex(C_INK), 0);
+        lv_obj_align(name, LV_ALIGN_LEFT_MID, 4, 0);
+        lv_label_set_text(name, MODE_ZH[i]);
+
+        lv_obj_t *val = lv_label_create(row);
+        lv_obj_set_style_text_font(val, &breath_font_20, 0);
+        lv_obj_set_style_text_color(val, lv_color_hex(C_DIM), 0);
+        lv_obj_align(val, LV_ALIGN_RIGHT_MID, -4, 0);
+        lv_label_set_text_fmt(val, "%lu " STR_UNIT_MIN,
+                              (unsigned long)s_save.mode_minutes[i]);
+    }
+
+    s_stats_pill = hint_pill_create(scr);
+    hint_pill_set(s_stats_pill, STR_HINT_BACK);
 }
 
 // ---------------------------------------------------------------------------
@@ -615,6 +679,7 @@ void breath_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         if (s_scr_id == SCR_VOLUME) enter_settings();
         else if (s_scr_id == SCR_SETTINGS) enter_home();
         else if (s_scr_id == SCR_EDIT) enter_settings();
+        else if (s_scr_id == SCR_STATS) enter_settings();   // v1.4
         return;
     }
     if (ev != BSP_BTN_CLICK) return;
@@ -654,8 +719,11 @@ void breath_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 s_save.glow = (uint8_t)((s_save.glow + 1u) % GLOW_LEVELS);
             } else if (s_set_sel == 2) {
                 enter_volume();
-            } else {
+            } else if (s_set_sel == 3) {
                 enter_edit();   // v1.3: YOURS pace editor
+                break;
+            } else {
+                enter_stats();  // v1.4: per-pattern overview
                 break;
             }
             breath_store_save(&s_save);   // playback is idle here (8.1)
@@ -708,6 +776,10 @@ void breath_ui_handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
         if (btn == BSP_BTN_OK) enter_home();
         break;
 
+    case SCR_STATS:   // v1.4: read-only overview; OK returns to SETUP
+        if (btn == BSP_BTN_OK) enter_settings();
+        break;
+
     default:
         break;
     }
@@ -722,9 +794,15 @@ void breath_ui_handle_audio(const breath_audio_event_t *ev) {
     // EV_DONE: chime has played; persist stats once, outside playback.
     s_sum_cycles = ev->st.cycle;
     s_sum_ms = ev->st.elapsed_ms;
+    uint32_t mins = breath_engine_minutes(s_sum_ms);
     s_save.sessions++;
-    s_save.minutes += breath_engine_minutes(s_sum_ms);
+    s_save.minutes += mins;
     s_save.cycles += s_sum_cycles;
+    if (s_pattern < BREATH_PATTERN_COUNT) {   // v1.4 STATS bookkeeping
+        s_save.mode_minutes[s_pattern] += mins;
+        s_save.last_mode = s_pattern;
+        s_save.last_min = mins;
+    }
     s_milestone_hit = s_save.minutes >= s_save.milestone;
     if (s_milestone_hit) {
         s_milestone_min = s_save.milestone;
