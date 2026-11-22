@@ -5,7 +5,17 @@
 > Status: Ready for firmware implementation
 > Hardware: FoloToy AI Passport (ESP32-C3, 240x320 ST7789P3, 3 ADC buttons, ES8311)
 > Target branch: feature/breathe (from upstream main, post PR #107)
-> PRD version: v1.3 (2026-11-13: your-pace pass - SIGH physiological
+> PRD version: v1.4 (2026-11-22: Chinese UI + overview pass - the whole
+> interface in Chinese on a generated 20 px WenKai subset
+> (tools/breathe/gen_assets.mjs, 119 glyphs, digits seeded for
+> runtime-formatted values; numeric readouts stay on Montserrat); palette
+> moved to the family night-navy baseline (bg/card/edge/muted shared with
+> EAR/OTP/TUNER) with the app teal kept as the accent; STATS overview
+> screen reached from a fifth SETUP row - a last-session line plus seven
+> per-pattern guided-minute rows (NVS keys m0..m6 / lm / lp, recorded at
+> session end); hint pills re-budgeted for WenKai, enforced by
+> tests/test_hint_budget.py from the generated font's glyph widths);
+> v1.3 (2026-11-13: your-pace pass - SIGH physiological
 > sigh preset (2.5 s in + 1.5 s top-up + 7 s out; engine gains a fifth
 > phase INHALE2, tone glides A3->E4 then E4->G4 on the top-up and falls
 > G4->A3 on the exhale, screen word "TOP UP"); YOURS custom pattern
@@ -40,9 +50,10 @@
 
 - Same board baseline as the repository guide; battery % top-right
   (bsp_battery_soc(), -1 -> "--%"); ES8311 playback at 16 kHz mono
-- Montserrat 14/20/48 (48 added to sdkconfig.defaults for the big
-  countdown/value readouts, same as feature/tuner; UI text is ASCII
-  English - no Chinese glyphs in the built-in fonts)
+- Montserrat 14/20/48 for numeric readouts (48 added to
+  sdkconfig.defaults for the big countdown/value, same as feature/tuner);
+  v1.4 UI text is Chinese on the generated 20 px WenKai subset
+  (breath_font_20.c + breath_strings.h from tools/breathe/gen_assets.mjs)
 - No RTC -> no dates, no streaks; persistence is lifetime counters only
 - Continuous-playback feed-latency rule (hardware guide 8.1): NVS writes and
   volume changes happen only outside playback; DMA budget is 90 ms and the
@@ -65,16 +76,19 @@ inhale -> hold -> top-up (INHALE2, SIGH preset only) -> exhale -> hold2.
 
 ## 4. Behavior, Screens & Buttons
 
-- HOME: title "BREATHE", battery top-right; rows FLOW / CALM / SIGH /
-  BOX / SLEEP / WAKE / YOURS / SETUP (v1.3: 8 rows at a 33 px pitch) with
-  sub-lines (phase durations / live YOURS summary); footer lifetime stats
-  "N min - N cycles". UP/DOWN move the selection (wrap), OK enters (YOURS
+- HOME: title "BREATHE", battery top-right; v1.4 rows show the Chinese
+  pattern names (WenKai subset; exact strings in the zh_CN PRD) over the
+  same 8-row 33 px layout (7 patterns + SETUP), with sub-lines (phase
+  durations / live YOURS summary / the SETUP row's live duration+glow
+  values); footer lifetime stats "N min - N cycles" (numeric,
+  Montserrat). UP/DOWN move the selection (wrap), OK enters (YOURS
   starts like any preset). 10 s idle dims to 30% (repo power
   convention); any key wakes.
-- SETUP (v1.3): rows DURATION (FREE / 1 / 3 / 5 MIN, OK cycles), GLOW
-  (BRIGHT / NIGHT / DARK, OK cycles), VOLUME (OK opens the big screen),
-  YOURS (live sub shows the custom summary, OK opens EDIT);
-  OK long-press returns HOME. VOLUME/EDIT keep their screens and return to
+- SETUP (v1.4): five rows at a 44 px pitch - duration (free / 1 / 3 / 5
+  minutes, OK cycles), glow (bright / night / dark, OK cycles), volume
+  (OK opens the big screen), YOURS (live sub shows the custom summary,
+  OK opens EDIT) and STATS (v1.4, opens the overview); OK long-press
+  returns HOME. VOLUME/EDIT/STATS keep their screens and return to
   SETUP.
 - EDIT (v1.3): YOURS pace editor, rows IN / HOLD / OUT / HOLD2; UP/DOWN
   adjust the selected row's seconds (in/out 1-10, holds 0-10, wrapping so
@@ -96,6 +110,11 @@ inhale -> hold -> top-up (INHALE2, SIGH preset only) -> exhale -> hold2.
   plus lifetime totals and, when crossed, the milestone line
   "MILESTONE! N MIN"; stats are persisted here, once, after playback has
   stopped; OK returns HOME.
+- STATS (v1.4): read-only overview reached from the fifth SETUP row; a
+  last-session line (pattern + minutes, or an empty-state line before the
+  first session) plus seven per-pattern guided-minute rows. OK returns to
+  SETUP. Per-pattern minutes and the last-session record are written with
+  the other stats at session end, outside playback.
 - Audio guidance: inhale = soft glide ~G3->D4 (196->294 Hz), exhale reversed,
   holds fade to silence; end chime E5->A5; volume follows the setting.
   Glide range A3->E4 (220->330 Hz); a SIGH top-up glides E4->G4
@@ -124,9 +143,13 @@ main/
   breath_store.c/.h  - NVS namespace "breathe": vol/du/gl +
                       ci/ch/co/c2 (YOURS seconds, v1.3; a partial or
                       corrupt set falls back to the 5+5 default) plus
-                      ssn/min/cyc/ms; failures degrade to defaults, log only
+                      ssn/min/cyc/ms and m0..m6/lm/lp (v1.4 per-pattern
+                      minutes + last-session record); failures degrade
+                      to defaults, log only
+  breath_font_20.c   - v1.4 generated 20 px WenKai subset (glyph-audited
+  breath_strings.h     by tools/breathe/gen_assets.mjs; STR_* macros)
   breath_ui.c/.h     - LVGL: HOME / SETUP / VOLUME / EDIT / SESSION /
-                      SUMMARY screens + idle dim + battery refresh
+                      SUMMARY / STATS screens + idle dim + battery refresh
   main.c             - BSP init -> event queues -> input/audio dispatch
                       (key_guard wiring mandatory; pattern per feature/tuner)
 tests/test_breath_engine.c, tests/test_breath_tone.c

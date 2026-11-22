@@ -5,7 +5,14 @@
 > 状态：待固件实现
 > 硬件：FoloToy AI Passport（ESP32-C3、240x320 ST7789P3、三 ADC 按键、ES8311）
 > 目标分支：feature/breathe（基于上游 main，含 PR #107）
-> PRD 版本：v1.3（2026-11-13：你的节奏包——新增 SIGH 生理性叹息预设
+> PRD 版本：v1.4（2026-11-22：中文化+总览包——界面全面中文，基于生成
+> 的 20px 文楷子集（tools/breathe/gen_assets.mjs，119 字形，运行期
+> 组合的数字已播种；数字读数仍用 Montserrat）；配色并回家族夜航蓝
+> 基线（bg/卡/边/灰与 EAR/OTP/TUNER 同源），应用青绿降为点缀色；
+> 新增 STATS 总览屏，从设置第五行进入——上次会话一行 + 七个分模式
+> 引导分钟行（NVS 键 m0..m6 / lm / lp，会话结束时落盘）；提示胶囊
+> 预算改按文楷实测，由 tests/test_hint_budget.py 从生成字体抽字形
+> 宽度强制）；v1.3（2026-11-13：你的节奏包——新增 SIGH 生理性叹息预设
 > （吸 2.5 秒 + 补吸 1.5 秒 + 长呼 7 秒，引擎新增第五相位 INHALE2，
 > 音调 A3→E4 上行后再接 E4→G4 补吸、呼气自 G4 长落至 A3，屏显
 > "TOP UP"）)；新增 YOURS 自定义节奏（第七槽位，SETUP→YOURS 进入
@@ -38,8 +45,9 @@
 
 - 与仓库指南相同的板级基线；右上角电量百分比
   （bsp_battery_soc()，-1 -> "--%"）；ES8311 以 16 kHz 单声道播放
-- Montserrat 14/20/48（48 加入 sdkconfig.defaults，用于大号倒计时/数值，
-  同 feature/tuner；UI 文案为 ASCII 英文 - 内置字体无中文字形）
+- Montserrat 14/20/48 用于数字读数（48 加入 sdkconfig.defaults，
+  同 feature/tuner）；v1.4 起界面文案为中文，走生成的 20px 文楷子集
+  （breath_font_20.c + breath_strings.h，由 tools/breathe/gen_assets.mjs 生成）
 - 无 RTC -> 无日期、无打卡连击；持久化只有终身计数
 - 连续播放喂入延迟规则（硬件指南 8.1）：NVS 写入与音量变更只在
   播放之外进行；DMA 余量 90 ms，整数合成器保持 >10 倍实时余量
@@ -61,20 +69,23 @@
 
 ## 4. 行为、界面与按键
 
-- HOME：标题 "BREATHE"，右上电量；列表 FLOW / CALM / SIGH / BOX /
-  SLEEP / WAKE / YOURS / SETUP（v1.3 八行 33px 间距），各带副行
-  （相位时长 / YOURS 实时摘要）；底部终身统计 "N min - N cycles"。
+- HOME：标题 "BREATHE"，右上电量；v1.4 行主文改为中文名（相干呼吸 /
+  放松呼吸 / 生理叹息 / 箱式呼吸 / 睡前放缓 / 晨间唤醒 / 我的节奏 /
+  设置，仍为八行 33px 间距），各带副行（相位时长数字 / YOURS 实时
+  摘要 / 设置行的时长+夜屏现行值）；底部终身统计 "N min - N cycles"
+  （数字，Montserrat）。UP/DOWN 移动选中（循环），OK 进入（YOURS
+  同预设直接开始）。闲置 10 秒背光降到 30%（仓库省电惯例）；任意按键唤醒。
   UP/DOWN 移动选中（循环），OK 进入（YOURS 同预设直接开始）。
   闲置 10 秒背光降到 30%（仓库省电惯例）；任意按键唤醒。
-- SETUP（v1.3）：DURATION（FREE/1/3/5 MIN，OK 循环）、GLOW
-  （BRIGHT/NIGHT/DARK，OK 循环）、VOLUME（OK 进大屏调节）、
-  YOURS（副行实时显示自定义摘要，OK 进 EDIT）四行；
-  OK 长按返回 HOME；VOLUME/EDIT 屏返回 SETUP。
+- SETUP（v1.4）：时长（不限/1/3/5 分钟，OK 循环）、夜屏
+  （常亮/夜光/熄屏，OK 循环）、音量（OK 进大屏调节）、我的节奏
+  （副行实时显示自定义摘要，OK 进 EDIT）、总览（v1.4，进 STATS）
+  五行 44px 间距；OK 长按返回 HOME；VOLUME/EDIT/STATS 屏返回 SETUP。
 - EDIT（v1.3）：YOURS 节奏编辑屏，四行 IN/HOLD/OUT/HOLD2；
   UP/DOWN 调整选中行的秒数（吸/呼 1-10，屏息 0-10，环绕无死键，
-  行内副行实时显示 "N s"）；OK 逐行下移，末行（HOLD2）上 OK 保存
+  行内副行实时显示 "N 秒"）；OK 逐行下移，末行（HOLD2）上 OK 保存
   并返回 SETUP；OK 长按取消返回（丢弃未保存修改）。胶囊提示随选中
-  行切换："UP/DOWN: SEC  OK: NEXT" / "OK: SAVE  LONG: CANCEL"。
+  行切换：「上下 调秒 OK 下一步」/「OK 保存 长按 取消」。
 - SESSION：先 3 秒 "GET READY" 倒计时（每秒一声轻提示音），随后
   循环引导：中央圆随吸气变大、呼气变小（SIGH 补吸时自 3/4 处继续
   胀满，相位文字 "TOP UP"）；相位文字 + 该相位剩余秒数；
@@ -86,6 +97,10 @@
 - SUMMARY：本次（周期数、时间、满 1 分钟时附呼吸节奏 PACE）+
   终身累计，跨越里程碑时显示 "MILESTONE! N MIN"；统计在此处、播放
   停止后一次性落盘；OK 返回 HOME。
+- STATS 总览（v1.4）：设置第五行进入的只读总览——上次会话一行
+  （模式 + 分钟；尚未练过时显示空态文案）+ 七个分模式引导分钟行；
+  OK 返回 SETUP。分模式分钟与上次会话记录随其余统计在会话结束时、
+  播放外一并落盘。
 - 声音引导：吸气 = 柔和滑音约 G3->D4（196->294 Hz），呼气反向，
   屏息淡出为静音；结束尾音 E5->A5；音量跟随设置。
   滑音区间 A3->E4（220->330 Hz）；SIGH 补吸再上滑 E4->G4
@@ -111,10 +126,13 @@ main/
                       播放结束尾音；所有 bsp_audio 调用在此串行化
   breath_store.c/.h  - NVS 命名空间 "breathe"：vol/du/gl +
                       ci/ch/co/c2（YOURS 秒数，v1.3，部分损坏
-                      回退默认 5+5）/ssn/min/cyc/ms；
+                      回退默认 5+5）/ssn/min/cyc/ms + m0..m6/lm/lp
+                      （v1.4 分模式分钟与上次会话记录）；
                       失败一律降级为默认值 + 记日志
+  breath_font_20.c   - v1.4 生成的 20px 文楷子集（tools/breathe/
+  breath_strings.h     gen_assets.mjs 生成并审计字形；STR_* 宏）
   breath_ui.c/.h     - LVGL：HOME / SETUP / VOLUME / EDIT / SESSION /
-                      SUMMARY 六屏 + 闲置调光 + 电量刷新
+                      SUMMARY / STATS 七屏 + 闲置调光 + 电量刷新
   main.c             - BSP 初始化 -> 事件队列 -> 输入/音频分发
                       （key_guard 接线强制；同 feature/tuner 模式）
 tests/test_breath_engine.c, tests/test_breath_tone.c
