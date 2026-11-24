@@ -132,6 +132,28 @@ run_static_checks() {
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_archive_firmware.py
     PYTHONDONTWRITEBYTECODE=1 python3 tests/test_install_passport_skills.py
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_almanac_cal.c main/almanac_cal.c main/almanac_tables.c \
+        -o "${test_dir}/test_almanac_cal"
+    "${test_dir}/test_almanac_cal"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_almanac_pick.c main/almanac_pick.c main/almanac_cal.c \
+        main/almanac_content.c main/almanac_tables.c \
+        -o "${test_dir}/test_almanac_pick"
+    "${test_dir}/test_almanac_pick"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_almanac_clock.c main/almanac_clock.c main/almanac_cal.c main/almanac_tables.c \
+        -o "${test_dir}/test_almanac_clock"
+    "${test_dir}/test_almanac_clock"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_almanac_power.c main/almanac_power.c \
+        -o "${test_dir}/test_almanac_power"
+    "${test_dir}/test_almanac_power"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Itests \
+        tests/test_almanac_view.c main/almanac_view.c main/almanac_pick.c main/almanac_cal.c \
+        main/almanac_content.c main/almanac_tables.c \
+        -o "${test_dir}/test_almanac_view"
+    "${test_dir}/test_almanac_view"
     rm -rf "${test_dir}"
     echo "Host tests: PASS"
     if [[ "${actionlint_skipped}" == 1 ]]; then

@@ -1,0 +1,71 @@
+// main/almanac_strings.h — UI chrome strings of the almanac ([PURE], host-testable).
+//
+// Every string here is also a row of the copy deck's section 12 (tools/almanac/content.txt), and
+// gen_assets.mjs refuses to build when one is not. They are also part of the glyph-audit source for
+// almanac_font_16.c and almanac_font_20.c.
+#pragma once
+
+#define STR_APP_TITLE "IT黄历"
+#define STR_ROAMING "漫游"
+
+#define STR_PAGE_DETAIL "详解"
+#define STR_PAGE_HOURS "时辰"
+#define STR_PAGE_DIRS "吉方"
+#define STR_PAGE_LUCK "运势"
+#define STR_PAGE_PICK "择吉日"
+#define STR_PAGE_HELP "帮助"
+#define STR_PAGE_ABOUT "关于"
+
+#define STR_MENU_CALIBRATE "校准到今天"
+#define STR_MENU_TODAY "回到今天"
+#define STR_MENU_PICK_DATE "择吉日"
+#define STR_MENU_HELP "帮助"
+#define STR_MENU_ABOUT "关于"
+
+#define STR_HINT_TODAY "上下 换日 · OK 详情"
+#define STR_HINT_NEXT "上下 换日 · OK 下一页"
+#define STR_HINT_PICK "上下 选事项 · OK 确定"
+#define STR_HINT_REPICK "OK 重选"
+#define STR_HINT_MENU "上下 选 · OK 确定"
+#define STR_HINT_LONG_MENU "长按 菜单"
+#define STR_HINT_LONG_BACK "长按 返回"
+#define STR_HINT_LONG_CANCEL "长按 取消"
+#define STR_HINT_BACK "OK 返回"
+#define STR_HINT_OK "OK 确定"
+
+#define STR_SETUP_TITLE "先设一个日期"
+#define STR_SETUP_YEAR "年"
+#define STR_SETUP_MONTH "月"
+#define STR_SETUP_DAY "日"
+#define STR_DATE_LOST "日期丢了，重设一下"
+#define STR_CALIBRATE_CONFIRM "从今天起算"
+
+#define STR_HELP_TEXT "上下翻日期，OK 一页页看，长按都是 OK 键。日期第一次要手设，之后自己走；断电会丢，丢了会提醒你。翻到别的日子会标「漫游」，这时进菜单选「校准到今天」就行。"
+#define STR_ABOUT_LINE_1 "IT黄历 1.0"
+#define STR_ABOUT_LINE_2 "干支、建除、吉时按传统历法推算"
+#define STR_ABOUT_LINE_3 "宜忌是写给 IT 人的玩笑，仅供娱乐"
+
+#define STR_LABEL_YI "宜"
+#define STR_LABEL_JI "忌"
+#define STR_LABEL_LUCKY "吉"
+#define STR_LABEL_UNLUCKY "凶"
+#define STR_LABEL_LUCKY_GODS "吉："
+#define STR_LABEL_UNLUCKY_GODS "凶："
+#define STR_LABEL_LUCKY_HOURS "吉时："
+#define STR_LABEL_UNLUCKY_HOURS "凶时："
+#define STR_LABEL_PROTOCOL "幸运协议"
+#define STR_LABEL_PORT "幸运端口"
+#define STR_LABEL_TOOL "幸运工具"
+#define STR_LABEL_COLOR "幸运色"
+#define STR_LABEL_NUMBER "幸运数字"
+#define STR_UNIT_HOUR "时"
+#define STR_PREFIX_CHONG "冲："
+#define STR_PREFIX_SHA "煞："
+#define STR_PREFIX_LUNAR "农历"
+#define STR_PREFIX_LEAP "闰"
+#define STR_LUCKY "吉"
+#define STR_UNLUCKY "凶"
+#define STR_HUANGDAO_DAY "黄道日"
+#define STR_HEIDAO_DAY "黑道日"
+#define STR_SEPARATOR " · "
+#define STR_LIST_SEPARATOR "、"
