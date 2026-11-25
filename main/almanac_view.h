@@ -1,7 +1,10 @@
-// main/almanac_view.h — screen geometry and the text of every screen line ([PURE], host-testable).
+// main/almanac_view.h — screen geometry, the text of every screen line and the layout scene of
+// every screen ([PURE], host-testable).
 //
-// The UI places labels from these constants and shows only the lines built here, so the host
-// layout test can measure every line that can ever appear with the real glyph widths.
+// almanac_view.c lays each screen out as a scene — boxes, then every line with the window it is
+// drawn into — and almanac_ui.c only draws that scene. Nothing is placed by the UI, so the host
+// layout test can measure every line that can ever appear, with the real glyph widths, against
+// the box it is drawn into.
 #pragma once
 
 #include <stdbool.h>
@@ -22,50 +25,101 @@
 #define ALMANAC_HINT_H 44
 #define ALMANAC_ROW16_H 18
 #define ALMANAC_ROW20_H 22
+#define ALMANAC_FONT48_LINE_H 47
+#define ALMANAC_MONO48_LINE_H 52
 
 #define ALMANAC_MARGIN_X 8
 #define ALMANAC_CONTENT_W (ALMANAC_SCREEN_W - 2 * ALMANAC_MARGIN_X)
-// Labelled block: a one- or two-character label at the left, text in the remaining column.
-#define ALMANAC_BLOCK_LABEL_W 28
-#define ALMANAC_BLOCK_X (ALMANAC_MARGIN_X + ALMANAC_BLOCK_LABEL_W)
-#define ALMANAC_BLOCK_W (ALMANAC_SCREEN_W - ALMANAC_BLOCK_X - ALMANAC_MARGIN_X)
-// Menu and matter list: rows of 20 px text, starting at the block column.
-#define ALMANAC_MENU_ROWS 5
-#define ALMANAC_MENU_Y 56
-#define ALMANAC_MENU_ROW_H 32
-#define ALMANAC_PICK_ROWS_VISIBLE 7
-#define ALMANAC_PICK_Y 40
-#define ALMANAC_PICK_ROW_H 28
+// A card is a filled box: its text sits this far inside, and stacked cards keep this gap. Cards
+// are outlined — neutral ones in the track colour, the selection and the focused value in the
+// accent, the seal in cinnabar — while the tinted blocks read by their fill alone.
+#define ALMANAC_CARD_PAD 4
+#define ALMANAC_CARD_GAP 4
+#define ALMANAC_CARD_BORDER 2
+#define ALMANAC_CARD_RADIUS 6
+// A note line starts this far right of the "label: value" line above it.
+#define ALMANAC_NOTE_INDENT 28
 // The widest character of almanac_font_16 is 16 px, so 12 characters never exceed 192 px.
 #define ALMANAC_BLOCK_UNITS 12
 #define ALMANAC_CONTENT_UNITS 14 // 14 × 16 = 224 = ALMANAC_CONTENT_W
 #define ALMANAC_LIST_MAX_LINES 3
 #define ALMANAC_TEXT_MAX_LINES 6
-// Today card: seal box on the left, three rows of 16 px text on the right.
-#define ALMANAC_SEAL_X 8
-#define ALMANAC_SEAL_Y 76
+
+// Today card: date and pillars, then the officer seal beside a card of three fact rows.
+#define ALMANAC_TODAY_DATE_Y 36
+#define ALMANAC_SEAL_ROW_Y 72
+#define ALMANAC_SEAL_ROW_H 60
 #define ALMANAC_SEAL_SIZE 56
-#define ALMANAC_SEAL_TEXT_X 76
-#define ALMANAC_SEAL_TEXT_W (ALMANAC_SCREEN_W - ALMANAC_SEAL_TEXT_X - ALMANAC_MARGIN_X)
-#define ALMANAC_LISTS_Y 138
-#define ALMANAC_BLOCK_GAP 4
-// Hours grid: 4 columns × 3 rows.
-#define ALMANAC_HOUR_CELL_W 54
-#define ALMANAC_HOUR_CELL_H 48
-#define ALMANAC_HOUR_GRID_X 8
-#define ALMANAC_HOUR_GRID_Y 40
+#define ALMANAC_SEAL_X ALMANAC_MARGIN_X
+#define ALMANAC_SEAL_Y (ALMANAC_SEAL_ROW_Y + (ALMANAC_SEAL_ROW_H - ALMANAC_SEAL_SIZE) / 2)
+#define ALMANAC_FACTS_X 72
+#define ALMANAC_FACTS_W (ALMANAC_SCREEN_W - ALMANAC_FACTS_X - ALMANAC_MARGIN_X)
+#define ALMANAC_FACTS_PAD_Y 3
+// Encouraged / avoided lists: a tinted block whose solid chip label stands left of the text.
+#define ALMANAC_LISTS_Y 136
+#define ALMANAC_LIST_PAD 3
+#define ALMANAC_LIST_TEXT_X 36
+#define ALMANAC_LIST_TEXT_W (ALMANAC_SCREEN_W - ALMANAC_MARGIN_X - ALMANAC_LIST_PAD - ALMANAC_LIST_TEXT_X)
+#define ALMANAC_CHIP_SIZE 22
+#define ALMANAC_CHIP_X 11
+#define ALMANAC_CHIP_RADIUS 5
 // Roaming tag: this far right of the date; date and tag are centred as one row.
 #define ALMANAC_ROAM_GAP 6
-// Fortune: a name row with its star bar and a comment row under it, one pair per category. The
-// 40 px pitch keeps a comment nearer its own name than the next category's name.
-#define ALMANAC_FORTUNE_Y 40
-#define ALMANAC_FORTUNE_ROW_H 40
-// Lucky dates: the matter name, then the dates under it.
-#define ALMANAC_RESULT_LIST_Y (ALMANAC_CONTENT_Y + 36)
-#define ALMANAC_RESULT_ROW_H (ALMANAC_ROW20_H + 6)
+
+// Detail: three two-line cards.
+#define ALMANAC_DETAIL_Y ALMANAC_CONTENT_Y
+
+// Hours grid: 4 columns × 3 rows of tinted tiles, then a strip per list.
+#define ALMANAC_HOUR_CELL_W 54
+#define ALMANAC_HOUR_CELL_H 48
+#define ALMANAC_HOUR_GRID_X ALMANAC_MARGIN_X
+#define ALMANAC_HOUR_GRID_Y 40
+#define ALMANAC_HOUR_GRID_GAP 2
+#define ALMANAC_HOUR_LIST_Y (ALMANAC_HOUR_GRID_Y + 3 * (ALMANAC_HOUR_CELL_H + ALMANAC_HOUR_GRID_GAP) + 6)
+
 // Directions page: the IT remarks start past the widest direction label, never under it.
-#define ALMANAC_DIR_SAY_X 84
-#define ALMANAC_DIR_SAY_GAP 6
+#define ALMANAC_DIR_SAY_X 88
+#define ALMANAC_DIR_LABEL_GAP 6
+
+// Fortune: one card per category, a name row with its star bar and a comment row under it.
+#define ALMANAC_FORTUNE_Y ALMANAC_CONTENT_Y
+#define ALMANAC_FORTUNE_ROW_H 44
+#define ALMANAC_FORTUNE_CARD_H 42
+#define ALMANAC_FORTUNE_PAD 3
+#define ALMANAC_FORTUNE_PIP_X 112
+#define ALMANAC_FORTUNE_PIP_PITCH 22
+#define ALMANAC_FORTUNE_PIP_W 20
+#define ALMANAC_FORTUNE_PIP_H 12
+#define ALMANAC_FORTUNE_PIP_GAP 6 // between the name and its star bar
+
+// Menu and matter list: rows of 20 px text, each row a card.
+#define ALMANAC_MENU_ROWS 5
+#define ALMANAC_MENU_Y 56 // first label row
+#define ALMANAC_MENU_ROW_H 32
+#define ALMANAC_MENU_CARD_H 30
+#define ALMANAC_PICK_ROWS_VISIBLE 7
+#define ALMANAC_PICK_Y 41 // first label row
+#define ALMANAC_PICK_ROW_H 30
+#define ALMANAC_PICK_CARD_H 28
+
+// Lucky dates: the matter name, then a card of the dates under it.
+#define ALMANAC_RESULT_LIST_Y (ALMANAC_CONTENT_Y + ALMANAC_ROW20_H + ALMANAC_CARD_GAP)
+#define ALMANAC_RESULT_ROW_H (ALMANAC_ROW20_H + 6)
+
+// Date setup: the unit, the value under the wheel in a focused card, then the picked date.
+#define ALMANAC_SETUP_UNIT_Y 78
+#define ALMANAC_SETUP_FOCUS_X 44
+#define ALMANAC_SETUP_FOCUS_Y 104
+#define ALMANAC_SETUP_FOCUS_W 152
+#define ALMANAC_SETUP_FOCUS_H 68
+#define ALMANAC_SETUP_VALUE_Y (ALMANAC_SETUP_FOCUS_Y + 8)
+#define ALMANAC_SETUP_DATE_Y 176
+
+// Calibrate confirm: one card holding the date and the question.
+#define ALMANAC_CONFIRM_CARD_Y 90
+#define ALMANAC_CONFIRM_CARD_H 74
+#define ALMANAC_CONFIRM_ROW_Y (ALMANAC_CONFIRM_CARD_Y + 6)
+#define ALMANAC_CONFIRM_ROW_H 40
 
 #define ALMANAC_LINE_BYTES 64
 
@@ -116,7 +170,79 @@ int almanac_view_help(almanac_line_t *lines, int max_lines);
 int almanac_view_about(almanac_line_t *lines, int max_lines);
 
 // Breaks text into lines of at most units_per_line characters, never starting a line with
-// closing punctuation. Returns the number of lines written (at most max_lines).
+// closing punctuation and never leaving a single character alone on the last line. Returns the
+// number of lines written (at most max_lines).
 int almanac_view_wrap_text(const char *text, int units_per_line, almanac_line_t *lines, int max_lines);
 // Lays the day's items out as "A、B、C" lines without splitting an item.
 int almanac_view_wrap_items(const almanac_day_t *day, almanac_side_t side, almanac_line_t *lines, int max_lines);
+
+// A scene is one screen's content: boxes first, then every line with the window it is drawn into.
+#define ALMANAC_SCENE_BOXES_MAX 32
+#define ALMANAC_SCENE_TEXTS_MAX 32
+#define ALMANAC_NO_BOX 0xFF
+
+typedef enum {
+    ALM_BOX_CARD = 0, // neutral region
+    ALM_BOX_CARD_SELECTED, // the menu or matter row under the cursor
+    ALM_BOX_FOCUS, // the value the date wheel is editing
+    ALM_BOX_GOOD, // encouraged, lucky, 黄道
+    ALM_BOX_BAD, // avoided, unlucky, 黑道
+    ALM_BOX_SEAL, // officer seal
+    ALM_BOX_CHIP_GOOD,
+    ALM_BOX_CHIP_BAD,
+    ALM_BOX_PIP_ON,
+    ALM_BOX_PIP_OFF,
+} almanac_box_kind_t;
+
+typedef enum { ALM_FONT_16 = 0, ALM_FONT_20, ALM_FONT_48, ALM_FONT_MONO_48 } almanac_font_t;
+typedef enum { ALM_INK = 0, ALM_INK_DIM, ALM_INK_GOOD, ALM_INK_BAD, ALM_INK_NAVY } almanac_ink_t;
+
+typedef struct {
+    int16_t x;
+    int16_t y;
+    int16_t w;
+    int16_t h;
+    uint8_t kind;
+} almanac_box_t;
+
+// One line drawn at y inside a window x..x+w: at the left edge, centred in the window, or
+// centred together with the lines that follow it (the date and its roaming tag).
+typedef struct {
+    int16_t x;
+    int16_t y;
+    int16_t w;
+    uint8_t font;
+    uint8_t ink;
+    uint8_t box; // ALMANAC_NO_BOX, or the index of the box the line is drawn into
+    uint8_t center; // 0 left, 1 centred, 2 centred as a group
+    char text[ALMANAC_LINE_BYTES];
+} almanac_text_t;
+
+typedef struct {
+    almanac_box_t boxes[ALMANAC_SCENE_BOXES_MAX];
+    almanac_text_t texts[ALMANAC_SCENE_TEXTS_MAX];
+    uint8_t n_boxes;
+    uint8_t n_texts;
+} almanac_scene_t;
+
+int almanac_font_line_h(almanac_font_t font);
+// Border the UI draws around a box kind, which the box's content must stay clear of.
+int almanac_box_border_h(almanac_box_kind_t kind);
+// Height of a card holding rows of 16 px text.
+int almanac_card_h(int rows);
+
+// banner stands in for the date line while the date is not confirmed; NULL shows the date.
+void almanac_scene_today(const almanac_view_day_t *day, const char *zhixing, bool roaming, const char *banner,
+                         almanac_scene_t *out);
+void almanac_scene_detail(const almanac_view_day_t *day, bool huangdao, almanac_scene_t *out);
+void almanac_scene_hours(const almanac_view_hours_t *hours, almanac_scene_t *out);
+void almanac_scene_lucky(const almanac_view_lucky_t *lucky, almanac_scene_t *out);
+void almanac_scene_fortune(const almanac_day_t *day, almanac_scene_t *out);
+void almanac_scene_menu(int selected, almanac_scene_t *out);
+void almanac_scene_pick(int selected, int first_visible, almanac_scene_t *out);
+void almanac_scene_result(const char *matter, const almanac_line_t *dates, int count, almanac_scene_t *out);
+// step is 0 for the year, 1 for the month, 2 for the day.
+void almanac_scene_setup(int step, int year, int month, int day, almanac_scene_t *out);
+void almanac_scene_confirm(const char *date_text, almanac_scene_t *out);
+void almanac_scene_help(const almanac_line_t *lines, int count, almanac_scene_t *out);
+void almanac_scene_about(const almanac_line_t *lines, int count, almanac_scene_t *out);

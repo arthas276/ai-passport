@@ -99,6 +99,12 @@ static void battery_refresh(void) {
 // Wall clock in seconds since the Unix epoch; the RTC keeps it running across deep sleep.
 static int64_t now_seconds(void) { return (int64_t)time(NULL); }
 
+// __DATE__ ("Mmm dd yyyy") is the day this file was compiled: what a device that never confirmed
+// a date is offered first.
+static int build_day(void) {
+    return almanac_clock_parse_build_date(__DATE__);
+}
+
 static void load_day(int jdn) {
     s_app.view_day = jdn;
     if (jdn < almanac_supported_min_day()) s_app.view_day = almanac_supported_min_day();
@@ -156,7 +162,7 @@ static void setup_start(bool date_lost) {
     (void)almanac_store_load(&last, &found);
     s_app.setup_step = 0;
     s_app.setup_from_lost = date_lost;
-    const int offered = almanac_clock_setup_default(found ? last : 0);
+    const int offered = almanac_clock_setup_default(found ? last : 0, build_day());
     almanac_ymd_t ymd;
     almanac_civil_from_days(offered, &ymd);
     s_app.setup_year = ymd.year;
@@ -342,7 +348,7 @@ static void render(void) {
                          banner);
         break;
     case SCR_DETAIL:
-        almanac_ui_detail(&view_day);
+        almanac_ui_detail(&view_day, day.huangdao);
         break;
     case SCR_HOURS: {
         almanac_view_hours_t hours;
@@ -638,7 +644,7 @@ esp_err_t almanac_app_start(void) {
     } else {
         ESP_LOGW(TAG, "时钟不可信，进入设日期");
         // The card behind the date wheel shows the day the wheel offers, never day zero.
-        s_app.today = almanac_clock_setup_default(s_app.stored_day ? last : 0);
+        s_app.today = almanac_clock_setup_default(s_app.stored_day ? last : 0, build_day());
     }
     load_day(s_app.today);
 

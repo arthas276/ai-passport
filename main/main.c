@@ -32,7 +32,7 @@ void on_key(int button, int event) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "almanac v1.0 starting");
+    ESP_LOGI(TAG, "almanac v1.1 starting");
     const uint32_t wake_causes = esp_sleep_get_wakeup_causes();
     if (wake_causes & (1u << ESP_SLEEP_WAKEUP_GPIO)) {
         key_guard_arm(&s_key_guard, esp_timer_get_time(), KEY_GUARD_MAX_US);

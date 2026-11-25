@@ -1,14 +1,13 @@
-// main/almanac_ui.c — LVGL screens for the almanac: chrome plus one builder per screen.
+// main/almanac_ui.c — LVGL screens for the almanac: screen chrome and the scene renderer.
 //
-// Night-navy family base with the almanac's cinnabar identity colour. Every builder creates its
-// own screen and runs on the input task under bsp_lvgl_lock, so nothing here touches LVGL from a
+// Night-navy family base with the almanac's cinnabar identity colour. Every builder draws the
+// scene that main/almanac_view.c lays out; nothing is placed here. Every builder creates its own
+// screen and runs on the input task under bsp_lvgl_lock, so nothing here touches LVGL from a
 // timer or another task.
 #include "almanac_ui.h"
 
 #include <stdio.h>
-#include <string.h>
 
-#include "almanac_strings.h"
 #include "lvgl.h"
 
 LV_FONT_DECLARE(almanac_font_16);
@@ -22,7 +21,12 @@ LV_FONT_DECLARE(almanac_font_48);
 #define C_TRACK 0x3A4C6E
 #define C_ACCENT 0x53D3B5
 #define C_CINNABAR 0xE0533F
+// Fills of the boxes with a meaning: the night-navy base moved 28 % of the way toward the colour
+// of that meaning, enough to read as a block and still dark enough for light text.
+#define C_GOOD_BG 0x2B565D
+#define C_BAD_BG 0x52333C
 
+static almanac_scene_t s_scene; // built while rendering on the 4 KB key task stack
 static lv_obj_t *s_scr;
 static lv_obj_t *s_batt;
 
@@ -51,15 +55,15 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, 
     return l;
 }
 
-static lv_obj_t *panel(lv_obj_t *parent, int x, int y, int w, int h, uint32_t bg, uint32_t border) {
+static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h, uint32_t fill, uint32_t border, int radius) {
     lv_obj_t *o = lv_obj_create(parent);
     lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_pos(o, x, y);
     lv_obj_set_size(o, w, h);
-    lv_obj_set_style_radius(o, 6, 0);
-    lv_obj_set_style_bg_color(o, lv_color_hex(bg), 0);
+    lv_obj_set_style_radius(o, radius, 0);
+    lv_obj_set_style_bg_color(o, lv_color_hex(fill), 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(o, border == bg ? 0 : 2, 0);
+    lv_obj_set_style_border_width(o, border ? ALMANAC_CARD_BORDER : 0, 0);
     lv_obj_set_style_border_color(o, lv_color_hex(border), 0);
     lv_obj_set_style_pad_all(o, 0, 0);
     return o;
@@ -82,198 +86,148 @@ void almanac_ui_begin(const char *title, int battery_soc) {
 }
 
 void almanac_ui_hints(const char *line1, const char *line2) {
-    lv_obj_t *pill = panel(s_scr, ALMANAC_MARGIN_X, ALMANAC_HINT_Y,
-                           ALMANAC_SCREEN_W - 2 * ALMANAC_MARGIN_X, ALMANAC_HINT_H, C_CARD, C_CARD);
-    label(pill, &almanac_font_16, C_DIM, 8, 4, line1);
-    label(pill, &almanac_font_16, C_DIM, 8, 4 + ALMANAC_ROW16_H, line2);
+    lv_obj_t *pill = box(s_scr, ALMANAC_MARGIN_X, ALMANAC_HINT_Y, ALMANAC_SCREEN_W - 2 * ALMANAC_MARGIN_X, ALMANAC_HINT_H,
+                         C_CARD, C_TRACK, ALMANAC_CARD_RADIUS);
+    // A bordered box hands its children coordinates from inside the border.
+    const int inset_x = 8 - ALMANAC_CARD_BORDER;
+    const int inset_y = 4 - ALMANAC_CARD_BORDER;
+    label(pill, &almanac_font_16, C_DIM, inset_x, inset_y, line1);
+    label(pill, &almanac_font_16, C_DIM, inset_x, inset_y + ALMANAC_ROW16_H, line2);
+}
+
+static const lv_font_t *scene_font(almanac_font_t font) {
+    switch (font) {
+    case ALM_FONT_16: return &almanac_font_16;
+    case ALM_FONT_20: return &almanac_font_20;
+    case ALM_FONT_48: return &almanac_font_48;
+    default: return &lv_font_montserrat_48;
+    }
+}
+
+static uint32_t scene_color(almanac_ink_t ink) {
+    switch (ink) {
+    case ALM_INK_DIM: return C_DIM;
+    case ALM_INK_GOOD: return C_ACCENT;
+    case ALM_INK_BAD: return C_CINNABAR;
+    case ALM_INK_NAVY: return C_BG;
+    default: return C_INK;
+    }
+}
+
+static void scene_box_style(const almanac_box_t *b, uint32_t *fill, uint32_t *border, int *radius) {
+    *border = 0;
+    *radius = ALMANAC_CARD_RADIUS;
+    switch ((almanac_box_kind_t)b->kind) {
+    case ALM_BOX_CARD: *fill = C_CARD; *border = C_TRACK; break;
+    case ALM_BOX_CARD_SELECTED:
+    case ALM_BOX_FOCUS: *fill = C_CARD; *border = C_ACCENT; break;
+    case ALM_BOX_GOOD: *fill = C_GOOD_BG; break;
+    case ALM_BOX_BAD: *fill = C_BAD_BG; break;
+    case ALM_BOX_SEAL: *fill = C_CARD; *border = C_CINNABAR; break;
+    case ALM_BOX_CHIP_GOOD: *fill = C_ACCENT; *radius = ALMANAC_CHIP_RADIUS; break;
+    case ALM_BOX_CHIP_BAD: *fill = C_CINNABAR; *radius = ALMANAC_CHIP_RADIUS; break;
+    case ALM_BOX_PIP_ON: *fill = C_ACCENT; *radius = 3; break;
+    default: *fill = C_TRACK; *radius = 3; break;
+    }
+}
+
+// Draws a scene: boxes first so every line sits on top, then the lines. A centred line is placed
+// from its measured width, and the lines of a group are centred together.
+static void draw_scene(const almanac_scene_t *scene) {
+    for (int i = 0; i < scene->n_boxes; ++i) {
+        const almanac_box_t *b = &scene->boxes[i];
+        uint32_t fill = C_CARD;
+        uint32_t border = 0;
+        int radius = ALMANAC_CARD_RADIUS;
+        scene_box_style(b, &fill, &border, &radius);
+        box(s_scr, b->x, b->y, b->w, b->h, fill, border, radius);
+    }
+    lv_obj_t *labels[ALMANAC_SCENE_TEXTS_MAX];
+    for (int i = 0; i < scene->n_texts; ++i) {
+        const almanac_text_t *text = &scene->texts[i];
+        labels[i] = label(s_scr, scene_font((almanac_font_t)text->font), scene_color((almanac_ink_t)text->ink), text->x,
+                          text->y, text->text);
+    }
+    lv_obj_update_layout(s_scr);
+    int i = 0;
+    while (i < scene->n_texts) {
+        const almanac_text_t *text = &scene->texts[i];
+        int x = text->x;
+        if (text->center == 2) {
+            int group_w = 0;
+            int k = i;
+            for (; k < scene->n_texts && scene->texts[k].center == 2; ++k) {
+                group_w += lv_obj_get_width(labels[k]) + (k > i ? ALMANAC_ROAM_GAP : 0);
+            }
+            x += (text->w - group_w) / 2;
+            for (; i < k; ++i) {
+                lv_obj_set_pos(labels[i], x, scene->texts[i].y);
+                x += lv_obj_get_width(labels[i]) + ALMANAC_ROAM_GAP;
+            }
+            continue;
+        }
+        if (text->center == 1) x += (text->w - lv_obj_get_width(labels[i])) / 2;
+        lv_obj_set_pos(labels[i], x, text->y);
+        ++i;
+    }
 }
 
 void almanac_ui_today(const almanac_view_day_t *day, const char *zhixing, bool roaming, const char *banner) {
-    const int y = ALMANAC_CONTENT_Y;
-    if (banner) {
-        lv_obj_t *warn = label(s_scr, &almanac_font_16, C_CINNABAR, 0, y, banner);
-        lv_obj_align(warn, LV_ALIGN_TOP_MID, 0, y);
-    } else {
-        lv_obj_t *date = label(s_scr, &almanac_font_16, C_INK, 0, y, day->date.text);
-        lv_obj_t *tag = roaming ? label(s_scr, &almanac_font_16, C_ACCENT, 0, y, STR_ROAMING) : NULL;
-        lv_obj_update_layout(s_scr);
-        const int date_w = lv_obj_get_width(date);
-        const int pair_w = date_w + (tag ? ALMANAC_ROAM_GAP + lv_obj_get_width(tag) : 0);
-        const int x = (ALMANAC_SCREEN_W - pair_w) / 2;
-        lv_obj_set_x(date, x);
-        if (tag) lv_obj_set_x(tag, x + date_w + ALMANAC_ROAM_GAP);
-    }
-    lv_obj_t *pillars = label(s_scr, &almanac_font_16, C_DIM, 0, y + ALMANAC_ROW16_H, day->pillars.text);
-    lv_obj_align(pillars, LV_ALIGN_TOP_MID, 0, y + ALMANAC_ROW16_H);
-
-    lv_obj_t *seal = panel(s_scr, ALMANAC_SEAL_X, ALMANAC_SEAL_Y, ALMANAC_SEAL_SIZE, ALMANAC_SEAL_SIZE, C_CARD,
-                           C_CINNABAR);
-    lv_obj_t *glyph = label(seal, &almanac_font_48, C_CINNABAR, 0, 0, zhixing);
-    lv_obj_center(glyph);
-
-    label(s_scr, &almanac_font_16, C_INK, ALMANAC_SEAL_TEXT_X, ALMANAC_SEAL_Y + 2, day->lunar.text);
-    label(s_scr, &almanac_font_16, C_DIM, ALMANAC_SEAL_TEXT_X, ALMANAC_SEAL_Y + 2 + ALMANAC_ROW16_H, day->gloss.text);
-    label(s_scr, &almanac_font_16, C_ACCENT, ALMANAC_SEAL_TEXT_X, ALMANAC_SEAL_Y + 2 + 2 * ALMANAC_ROW16_H,
-          day->day_type.text);
-
-    int list_y = ALMANAC_LISTS_Y;
-    label(s_scr, &almanac_font_20, C_ACCENT, ALMANAC_MARGIN_X, list_y, STR_LABEL_YI);
-    for (int i = 0; i < day->yi_lines; ++i) {
-        label(s_scr, &almanac_font_16, C_INK, ALMANAC_BLOCK_X, list_y + i * ALMANAC_ROW16_H, day->yi[i].text);
-    }
-    list_y += day->yi_lines * ALMANAC_ROW16_H + ALMANAC_BLOCK_GAP;
-    label(s_scr, &almanac_font_20, C_CINNABAR, ALMANAC_MARGIN_X, list_y, STR_LABEL_JI);
-    for (int i = 0; i < day->ji_lines; ++i) {
-        label(s_scr, &almanac_font_16, C_INK, ALMANAC_BLOCK_X, list_y + i * ALMANAC_ROW16_H, day->ji[i].text);
-    }
+    almanac_scene_today(day, zhixing, roaming, banner, &s_scene);
+    draw_scene(&s_scene);
 }
 
-void almanac_ui_detail(const almanac_view_day_t *day) {
-    int y = ALMANAC_CONTENT_Y;
-    label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, day->chong.text);
-    y += ALMANAC_ROW16_H;
-    label(s_scr, &almanac_font_16, C_DIM, ALMANAC_BLOCK_X, y, day->chong_note.text);
-    y += ALMANAC_ROW16_H + 6;
-    for (int i = 0; i < 2; ++i) {
-        label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, day->baiji[i].text);
-        y += ALMANAC_ROW16_H;
-    }
-    y += 6;
-    label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, day->day_type.text);
-    y += ALMANAC_ROW16_H;
-    label(s_scr, &almanac_font_16, C_DIM, ALMANAC_BLOCK_X, y, day->day_type_line.text);
+void almanac_ui_detail(const almanac_view_day_t *day, bool huangdao) {
+    almanac_scene_detail(day, huangdao, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_hours(const almanac_view_hours_t *hours) {
-    for (int i = 0; i < 12; ++i) {
-        const int col = i % 4;
-        const int row = i / 4;
-        lv_obj_t *cell = panel(s_scr, ALMANAC_HOUR_GRID_X + col * (ALMANAC_HOUR_CELL_W + 2),
-                               ALMANAC_HOUR_GRID_Y + row * (ALMANAC_HOUR_CELL_H + 2), ALMANAC_HOUR_CELL_W,
-                               ALMANAC_HOUR_CELL_H, C_CARD, C_CARD);
-        label(cell, &almanac_font_16, C_INK, 6, 4, hours->hour[i].text);
-        label(cell, &almanac_font_16, hours->lucky[i] ? C_ACCENT : C_CINNABAR, 6, 4 + ALMANAC_ROW16_H,
-              hours->lucky[i] ? STR_LUCKY : STR_UNLUCKY);
-    }
-    int y = ALMANAC_HOUR_GRID_Y + 3 * (ALMANAC_HOUR_CELL_H + 2) + 8;
-    label(s_scr, &almanac_font_16, C_ACCENT, ALMANAC_MARGIN_X, y, hours->lucky_hours.text);
-    label(s_scr, &almanac_font_16, C_CINNABAR, ALMANAC_MARGIN_X, y + ALMANAC_ROW16_H, hours->unlucky_hours.text);
+    almanac_scene_hours(hours, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_lucky(const almanac_view_lucky_t *lucky) {
-    int y = ALMANAC_CONTENT_Y;
-    int say_x = ALMANAC_DIR_SAY_X;
-    for (int k = 0; k < 4; ++k) {
-        lv_obj_t *dir = label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, lucky->dir[k].text);
-        lv_obj_update_layout(dir);
-        const int right = ALMANAC_MARGIN_X + lv_obj_get_width(dir) + ALMANAC_DIR_SAY_GAP;
-        if (right > say_x) say_x = right;
-        lv_obj_delete(dir);
-    }
-    for (int k = 0; k < 4; ++k) {
-        label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, lucky->dir[k].text);
-        label(s_scr, &almanac_font_16, C_DIM, say_x, y, lucky->dir_say[k].text);
-        y += ALMANAC_ROW16_H;
-    }
-    y += 4;
-    label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, lucky->protocol.text);
-    label(s_scr, &almanac_font_16, C_DIM, ALMANAC_BLOCK_X, y + ALMANAC_ROW16_H, lucky->protocol_note.text);
-    y += 2 * ALMANAC_ROW16_H;
-    label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, lucky->port.text);
-    label(s_scr, &almanac_font_16, C_DIM, ALMANAC_BLOCK_X, y + ALMANAC_ROW16_H, lucky->port_note.text);
-    y += 2 * ALMANAC_ROW16_H;
-    label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, lucky->tool.text);
-    y += ALMANAC_ROW16_H;
-    label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, lucky->color_number.text);
+    almanac_scene_lucky(lucky, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_fortune(const almanac_day_t *day) {
-    for (int i = 0; i < ALMANAC_LUCK_CATEGORY_COUNT; ++i) {
-        const int y = ALMANAC_FORTUNE_Y + i * ALMANAC_FORTUNE_ROW_H;
-        const int stars = day->luck[i];
-        label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, y, almanac_luck_name(i));
-        for (int k = 0; k < 5; ++k) {
-            lv_obj_t *pip = panel(s_scr, 112 + k * 22, y + 3, 20, 12, k < stars ? C_ACCENT : C_TRACK,
-                                  k < stars ? C_ACCENT : C_TRACK);
-            lv_obj_set_style_radius(pip, 3, 0);
-        }
-        label(s_scr, &almanac_font_16, C_DIM, ALMANAC_MARGIN_X, y + ALMANAC_ROW16_H,
-              almanac_luck_line(i, stars));
-    }
+    almanac_scene_fortune(day, &s_scene);
+    draw_scene(&s_scene);
 }
 
-static const char *const MENU_ITEMS[ALMANAC_MENU_ROWS] = {
-    STR_MENU_CALIBRATE, STR_MENU_TODAY, STR_MENU_PICK_DATE, STR_MENU_HELP, STR_MENU_ABOUT,
-};
-
 void almanac_ui_menu(int selected) {
-    for (int i = 0; i < ALMANAC_MENU_ROWS; ++i) {
-        const int y = ALMANAC_MENU_Y + i * ALMANAC_MENU_ROW_H;
-        if (i == selected) {
-            panel(s_scr, ALMANAC_MARGIN_X, y - 4, ALMANAC_CONTENT_W, 28, C_CARD, C_CARD);
-        }
-        label(s_scr, &almanac_font_20, i == selected ? C_ACCENT : C_DIM, ALMANAC_BLOCK_X, y,
-              MENU_ITEMS[i]);
-    }
+    almanac_scene_menu(selected, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_pick(int selected, int first_visible) {
-    for (int row = 0; row < ALMANAC_PICK_ROWS_VISIBLE; ++row) {
-        const int matter = first_visible + row;
-        if (matter >= ALMANAC_MATTER_COUNT) break;
-        const int y = ALMANAC_PICK_Y + row * ALMANAC_PICK_ROW_H;
-        if (matter == selected) {
-            panel(s_scr, ALMANAC_MARGIN_X, y - 3, ALMANAC_CONTENT_W, 26, C_CARD, C_CARD);
-        }
-        label(s_scr, &almanac_font_20, matter == selected ? C_ACCENT : C_DIM, ALMANAC_BLOCK_X, y,
-              almanac_matter(matter));
-    }
+    almanac_scene_pick(selected, first_visible, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_result(const char *matter, const almanac_line_t *dates, int count) {
-    lv_obj_t *name = label(s_scr, &almanac_font_20, C_CINNABAR, 0, ALMANAC_CONTENT_Y, matter);
-    lv_obj_align(name, LV_ALIGN_TOP_MID, 0, ALMANAC_CONTENT_Y);
-    for (int i = 0; i < count; ++i) {
-        const int y = ALMANAC_RESULT_LIST_Y + i * ALMANAC_RESULT_ROW_H;
-        lv_obj_t *line = label(s_scr, &almanac_font_20, C_INK, 0, y, dates[i].text);
-        lv_obj_align(line, LV_ALIGN_TOP_MID, 0, y);
-    }
+    almanac_scene_result(matter, dates, count, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_setup(int step, int year, int month, int day) {
-    const char *const unit = step == 0 ? STR_SETUP_YEAR : step == 1 ? STR_SETUP_MONTH : STR_SETUP_DAY;
-    const int value = step == 0 ? year : step == 1 ? month : day;
-    lv_obj_t *u = label(s_scr, &almanac_font_20, C_DIM, 0, 84, unit);
-    lv_obj_align(u, LV_ALIGN_TOP_MID, 0, 84);
-    char buf[12];
-    snprintf(buf, sizeof(buf), "%d", value);
-    lv_obj_t *v = label(s_scr, &lv_font_montserrat_48, C_INK, 0, 112, buf);
-    lv_obj_align(v, LV_ALIGN_TOP_MID, 0, 112);
-    char picked[40];
-    snprintf(picked, sizeof(picked), "%d%s%d%s%d%s", year, STR_SETUP_YEAR, month, STR_SETUP_MONTH, day,
-             STR_SETUP_DAY);
-    lv_obj_t *date = label(s_scr, &almanac_font_16, C_DIM, 0, 166, picked);
-    lv_obj_align(date, LV_ALIGN_TOP_MID, 0, 166);
+    almanac_scene_setup(step, year, month, day, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_confirm(const char *date_text) {
-    lv_obj_t *d = label(s_scr, &almanac_font_20, C_INK, 0, 96, date_text);
-    lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 96);
-    lv_obj_t *q = label(s_scr, &almanac_font_20, C_ACCENT, 0, 136, STR_CALIBRATE_CONFIRM);
-    lv_obj_align(q, LV_ALIGN_TOP_MID, 0, 136);
+    almanac_scene_confirm(date_text, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_help(const almanac_line_t *lines, int count) {
-    for (int i = 0; i < count; ++i) {
-        label(s_scr, &almanac_font_16, C_INK, ALMANAC_MARGIN_X, ALMANAC_CONTENT_Y + i * ALMANAC_ROW16_H,
-              lines[i].text);
-    }
+    almanac_scene_help(lines, count, &s_scene);
+    draw_scene(&s_scene);
 }
 
 void almanac_ui_about(const almanac_line_t *lines, int count) {
-    for (int i = 0; i < count; ++i) {
-        lv_obj_t *l = label(s_scr, &almanac_font_16, i == 0 ? C_ACCENT : C_DIM, 0, ALMANAC_CONTENT_Y + i * ALMANAC_ROW16_H,
-                            lines[i].text);
-        lv_obj_align(l, LV_ALIGN_TOP_MID, 0, ALMANAC_CONTENT_Y + i * ALMANAC_ROW16_H);
-    }
+    almanac_scene_about(lines, count, &s_scene);
+    draw_scene(&s_scene);
 }

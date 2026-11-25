@@ -41,7 +41,7 @@
 #define STR_CALIBRATE_CONFIRM "从今天起算"
 
 #define STR_HELP_TEXT "上下翻日期，OK 一页页看，长按都是 OK 键。日期第一次要手设，之后自己走；断电会丢，丢了会提醒你。翻到别的日子会标「漫游」，这时进菜单选「校准到今天」就行。"
-#define STR_ABOUT_LINE_1 "IT黄历 1.0"
+#define STR_ABOUT_LINE_1 "IT黄历 1.1"
 #define STR_ABOUT_LINE_2 "干支、建除、吉时按传统历法推算"
 #define STR_ABOUT_LINE_3 "宜忌是写给 IT 人的玩笑，仅供娱乐"
 

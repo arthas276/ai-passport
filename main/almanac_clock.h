@@ -21,6 +21,8 @@ int almanac_clock_day(int64_t now);
 void almanac_clock_split(int64_t now, int *jdn, int *hour, int *minute);
 // Wall-clock time of a local day at hour:minute.
 int64_t almanac_clock_make(int jdn, int hour, int minute);
+// Day of __DATE__ ("Mmm dd yyyy"), or 0 when the text is not a real day inside the supported range.
+int almanac_clock_parse_build_date(const char *date);
 // Day the date wheel offers first: the day the user last confirmed while it is inside the
-// supported range, otherwise 2026-01-01.
-int almanac_clock_setup_default(int last_confirmed_day);
+// supported range, else the day the firmware was compiled, otherwise 2026-01-01.
+int almanac_clock_setup_default(int last_confirmed_day, int build_day);
