@@ -2,7 +2,7 @@
   <a href="PRD_ALMANAC.zh_CN.md">简体中文</a> · <strong>English</strong>
 </p>
 
-# ALMANAC v1.0 — IT Almanac: Product Requirements
+# ALMANAC v1.1 — IT Almanac: Product Requirements
 
 A pocket almanac for people who run servers, machine rooms and networks. It keeps the traditional
 day sheet — lunar date, solar terms, sexagenary pillars, the twelve day officers, the two taboo
@@ -12,6 +12,15 @@ protocol, port, tool, colour and number, a five-line fortune sheet, and a lucky-
 
 The device is offline and has no battery-backed clock: the app asks for the date once, keeps it
 across deep sleep, and asks again after a power loss.
+
+## What v1.1 changes
+
+- Screens: every content region is an outlined card instead of one dark background. Encouraged,
+  lucky and auspicious items sit on teal-tinted blocks, avoided, unlucky and inauspicious ones on
+  cinnabar-tinted blocks. Each of the two lists is one block with a solid square label.
+- Date: on a device that has never confirmed a date, the wheel opens on the firmware's build day
+  instead of 2026-01-01.
+- Line breaking no longer leaves a single character alone on the last line (the About page).
 
 The literal on-screen strings are Chinese; `PRD_ALMANAC.zh_CN.md` is the authority for them and
 for the copy deck they come from. This file describes the behaviour in English.
@@ -84,7 +93,8 @@ Nothing else is bound.
 
 - Times are China Standard Time (UTC+8); the device never sets a time zone.
 - On first run, or when the system clock is outside 2020–2100, the app opens the date wheel. It
-  offers the last confirmed day when one is stored, otherwise 2026-01-01. The wheel can be
+  offers the last confirmed day when one is stored, otherwise the firmware's build day
+  (`__DATE__`), and falls back to 2026-01-01 when neither is usable. The wheel can be
   cancelled back to the today card, which shows the day the wheel was left on. Until a date is
   confirmed, the card shows a reminder in place
   of its date line - the lost-date banner when a day was stored and the clock is gone, the setup
@@ -104,14 +114,23 @@ Nothing else is bound.
 
 ## Rendering and fonts
 
-- Family night-navy base (`#1B263B` background, `#24344D` panels, `#8D99AE` secondary text) with
-  the almanac's cinnabar identity colour (`#E0533F`) for the avoided list, the seal and emphasis.
+- Family night-navy base (`#1B263B` background, `#24344D` panels, `#3A4C6E` outlines, `#8D99AE`
+  secondary text) with the almanac's cinnabar identity colour (`#E0533F`) for the seal, emphasis
+  and the blocks with an unfavourable meaning.
+- Every content region is an outlined card: neutral cards in the track colour, the selected row and
+  the value under the wheel in the accent, the seal in cinnabar. Regions with a meaning read by
+  their fill: the encouraged list, lucky hours, auspicious directions and an auspicious day type use
+  the night-navy base moved 28 % toward teal `#53D3B5` (`#2B565D`); the avoided list, unlucky hours
+  and an inauspicious day type use the base moved 28 % toward cinnabar (`#52333C`). Each of the two
+  lists is one such block with a 22 px solid square label in night-navy type.
+- `main/almanac_view.c` lays each screen out as a scene — boxes first, then every line with its
+  window — and `main/almanac_ui.c` only draws that scene.
 - Two WenKai subsets (16 px and 20 px, 867 glyphs including ASCII) plus a 48 px subset of the
   twelve officer glyphs. Fonts are generated from the string literals of `main/almanac*.{c,h}`;
   the generator fails when a glyph is missing.
-- Layout is computed from real glyph advances: `main/almanac_view.c` owns the geometry and every
-  line that can appear, and `tests/test_almanac_view.c` measures them over four years of days
-  against the box each one is drawn into.
+- Layout is checked from real glyph advances: `tests/test_almanac_view.c` runs every screen's scene
+  over four years of days — every card inside the content band, no two cards partly overlapping,
+  and every line measured against the card it is drawn into, clear of every other line and card.
 
 ## Tests
 
@@ -119,11 +138,11 @@ Nothing else is bound.
 | --- | --- |
 | `tests/test_almanac_cal.c` | 573 golden calendar days, 38 golden hour rows, pillar and officer rules |
 | `tests/test_almanac_pick.c` | draw determinism, mutex table, lucky-date search |
-| `tests/test_almanac_clock.c` | time conversion, lost-clock window, setup default |
+| `tests/test_almanac_clock.c` | time conversion, lost-clock window, build-date parsing, setup default |
 | `tests/test_almanac_power.c` | dim and sleep thresholds, backlight levels |
-| `tests/test_almanac_view.c` | every screen line fits its box, every day of 2026–2029 |
+| `tests/test_almanac_view.c` | every screen's scene stays inside the screen and every line inside its card, every day of 2026–2029 |
 
-## Not in v1.0
+## Not planned
 
 - No custom lucky date (the search is fixed to the twelve matters).
 - No solar-term page: the terms only appear inside the month pillar.
